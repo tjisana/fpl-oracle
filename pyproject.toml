@@ -1,0 +1,44 @@
+[project]
+name = "fpl-oracle"
+version = "0.1.0"
+description = "Wins FPL leagues by aggregating YouTube creator expertise"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40",
+    "google-genai>=1.0",
+    "httpx>=0.27",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "pulp>=2.9",
+    "rapidfuzz>=3.9",
+    "youtube-transcript-api>=0.6",
+    "yt-dlp>=2025.1.1",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+    "typer>=0.12",
+]
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.70",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "respx>=0.21",
+    "pre-commit>=4.6.2",
+]
+
+[tool.pytest.ini_options]
+markers = ["network: hits live external APIs"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fpl_oracle"]
