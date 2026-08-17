@@ -55,15 +55,37 @@ code in `fpl/`, `extract/`, `consensus/`, or `solver/`.
 
 ## Model routing
 
-- The main session (Opus/Fable) owns planning, architecture, design decisions,
-  prompt design, and code review.
-- Delegate well-specified implementation tasks (new module from a detailed spec,
-  test fixes, mechanical refactors, boilerplate) to the `implementer` subagent
-  (`.claude/agents/implementer.md`, runs on Sonnet).
-- EXCEPTION — tricky modules stay on the main model: `solver/`, `consensus/`,
-  and `extract/` are implemented in the main session, not delegated. Only hand
-  the implementer a change there if the exact logic is already decided and
-  written out in the task.
+Three tiers (main sessions are expected to run on Opus):
+
+- **Opus (main session)** — owns planning, day-to-day design decisions, prompt
+  design, code review, and integration. The default brain.
+- **Sonnet (`implementer` subagent)** — well-specified implementation tasks:
+  new module from a detailed spec, test fixes, mechanical refactors,
+  boilerplate. EXCEPTION — tricky modules stay on the main model: `solver/`,
+  `consensus/`, and `extract/` are implemented in the main session, not
+  delegated. Only hand the implementer a change there if the exact logic is
+  already decided and written out in the task.
+- **Fable (`architect` subagent)** — escalation for the hardest decisions only:
+  cross-module design questions, solver formulation trade-offs, scoring
+  philosophy, calls where the main session is genuinely torn between defensible
+  options. The architect has no conversation context, so the brief must be
+  self-contained (the question, the options considered, constraints, relevant
+  file paths). It advises; the main session decides and implements. Don't
+  route routine questions here.
+
+### Clarification loop (implementer ↔ main session)
+
+- The implementer reports ambiguities instead of guessing. When it does, the
+  main session resolves the ambiguity (consulting the architect if it's
+  genuinely hard) and sends the clarified task back to the SAME agent via
+  SendMessage, so it keeps its context.
+- Hard cap: 3 clarification rounds on one task. If it's still unresolved after
+  3, STOP and escalate to the user — repeated failure to converge means the
+  task framing or the design itself is wrong, and more rounds won't fix it.
+- Exception — skip the loop and go straight to the user when the ambiguity is
+  a decision only the user can make: scope changes, personal preferences,
+  anything involving money or external accounts. Models looping on those just
+  burns rounds guessing at the user's intent.
 
 ## Compaction
 
