@@ -50,9 +50,20 @@ code in `fpl/`, `extract/`, `consensus/`, or `solver/`.
 - Before treating a task as done, review the diff in a fresh subagent context
   against PLAN.md: every requirement implemented, edge cases tested,
   nothing out of scope changed.
-- Prefer research subagents for exploring APIs/transcripts; keep the main
-  context for implementation.
+- Prefer research subagents for exploring APIs/transcripts.
 - Commit per logical change with conventional-commit messages (`feat:`, `fix:`, `chore:`).
+
+## Model routing
+
+- The main session (Opus/Fable) owns planning, architecture, design decisions,
+  prompt design, and code review.
+- Delegate well-specified implementation tasks (new module from a detailed spec,
+  test fixes, mechanical refactors, boilerplate) to the `implementer` subagent
+  (`.claude/agents/implementer.md`, runs on Sonnet).
+- EXCEPTION — tricky modules stay on the main model: `solver/`, `consensus/`,
+  and `extract/` are implemented in the main session, not delegated. Only hand
+  the implementer a change there if the exact logic is already decided and
+  written out in the task.
 
 ## Compaction
 
