@@ -20,8 +20,10 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       6/20 qualify and sit at `Tier.CORE`; the other 14 are `Tier.SECONDARY` at the default
       weight. Full per-creator sourcing in `roster/registry.py` notes.
 - [x] `roster/weights.py`: `compute_weight()` (API tier) + `compute_documented_weight()`
-      (documented tier) + `weight_for()` dispatcher — exercised on the 6 documented creators;
-      still unexercised on real API history since no one has a verified ID yet.
+      (documented tier) + `weight_for()` dispatcher — unit-tested in
+      `tests/test_weights.py` (24 tests: formula math, band boundaries, caps/floors,
+      dispatcher routing); still unexercised on real API history since no one has a
+      verified ID yet.
 - [ ] Transcript ingestion working end-to-end on 3 videos
 
 ## Phase 2 — Extraction (days 3–4)
