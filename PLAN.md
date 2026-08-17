@@ -24,7 +24,16 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       `tests/test_weights.py` (24 tests: formula math, band boundaries, caps/floors,
       dispatcher routing); still unexercised on real API history since no one has a
       verified ID yet.
-- [ ] Transcript ingestion working end-to-end on 3 videos
+- [x] Transcript ingestion working end-to-end on 3 videos — `ingest/transcripts.py`
+      (fetch/save/load, on-disk cache doubling as the read-through store) +
+      `ingest/youtube_client.list_recent_videos` (uploads-playlist resolution, 6h-fresh
+      cache) + `ingest/run_ingest.py` (excludes creators sharing a channel_id entirely — FFH's
+      three personas and The FPL Wire's three co-hosts, including Pras, a CORE creator, so
+      FPL Wire content is currently NOT ingested at all — then pulls the newest video with a
+      transcript for the first 3 CORE-first eligible creators; follow-up: title-filtered /
+      representative attribution to bring FFH + FPL Wire content in). Ran for real: 3/3 saved
+      (Let's Talk FPL, FPL Focal, Holly Shand), all auto-generated English. Unit + one
+      `@pytest.mark.network` test in `tests/test_transcripts.py`.
 
 ## Phase 2 — Extraction (days 3–4)
 - [ ] `extract/schemas.py`: Pick / VideoExtraction Pydantic models

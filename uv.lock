@@ -435,7 +435,7 @@ requires-dist = [
     { name = "rapidfuzz", specifier = ">=3.9" },
     { name = "rich", specifier = ">=13.7" },
     { name = "typer", specifier = ">=0.12" },
-    { name = "youtube-transcript-api", specifier = ">=0.6" },
+    { name = "youtube-transcript-api", specifier = ">=1.2" },
     { name = "yt-dlp", specifier = ">=2025.1.1" },
 ]
 
