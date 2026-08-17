@@ -20,8 +20,9 @@ _APPROX_PLAYER_POOL = 10_000_000
 # (Verification.UNVERIFIED). Deliberately low: it must sit below what a
 # genuinely good verified history would score (see _rank_score), so
 # verification is actually rewarded rather than being a wash. 0.2 sits
-# below a top-400k (top ~4%) verified finish (_rank_score(400_000) ≈ 0.2)
-# — "no evidence of skill", not "known-bad".
+# just below a top-300k (top ~3%) verified finish (_rank_score(300_000) ≈
+# 0.215), and roughly equal to a top-~400k finish (_rank_score(400_000) ≈
+# 0.1997) — "no evidence of skill", not "known-bad".
 DEFAULT_TIER2_WEIGHT = 0.2
 
 # Verification.DOCUMENTED (reputable source, no pullable ID) is weighted
