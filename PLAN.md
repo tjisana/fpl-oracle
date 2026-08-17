@@ -27,13 +27,20 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
 - [x] Transcript ingestion working end-to-end on 3 videos — `ingest/transcripts.py`
       (fetch/save/load, on-disk cache doubling as the read-through store) +
       `ingest/youtube_client.list_recent_videos` (uploads-playlist resolution, 6h-fresh
-      cache) + `ingest/run_ingest.py` (excludes creators sharing a channel_id entirely — FFH's
-      three personas and The FPL Wire's three co-hosts, including Pras, a CORE creator, so
-      FPL Wire content is currently NOT ingested at all — then pulls the newest video with a
-      transcript for the first 3 CORE-first eligible creators; follow-up: title-filtered /
-      representative attribution to bring FFH + FPL Wire content in). Ran for real: 3/3 saved
-      (Let's Talk FPL, FPL Focal, Holly Shand), all auto-generated English. Unit + one
-      `@pytest.mark.network` test in `tests/test_transcripts.py`.
+      cache) + `ingest/run_ingest.py`, now with shared-channel attribution instead of a
+      blanket exclusion: The FPL Wire's episodes (joint discussions, no reliable per-co-host
+      title split) are ingested once via `channel_primary=True` on Pras (a CORE creator) —
+      Zophar and Lateriser stay uningested individually, their content flows in through Pras's
+      weight. Fantasy Football Hub's three personas (FPL Salah, FPL Matthew, Big Man Bakar)
+      each get a `title_filter` and are attributed a video only when exactly one persona's
+      filter matches its title (`ingest/run_ingest.videos_for_creator`, pure + unit-tested).
+      Ran for real: 3/3 saved (Let's Talk FPL, Pras / The FPL Wire, FPL Focal), all
+      auto-generated English — Pras/FPL Wire content is now flowing in as intended. Diagnostic
+      against the FFH channel's 10 most recent uploads found none of the three persona title
+      filters currently matching anything — worth a human re-check once FFH next posts
+      persona-titled content; not tuned further without title evidence. Unit tests in
+      `tests/test_attribution.py` (pure attribution function + registry invariants) and the
+      existing `tests/test_transcripts.py`.
 
 ## Phase 2 — Extraction (days 3–4)
 - [ ] `extract/schemas.py`: Pick / VideoExtraction Pydantic models

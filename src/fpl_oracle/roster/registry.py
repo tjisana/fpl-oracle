@@ -212,11 +212,16 @@ REGISTRY: list[Creator] = [
         verification=Verification.DOCUMENTED,
         documented_finishes=_PRAS_CLAIMS,
         weight=weight_for(Verification.DOCUMENTED, documented_finishes=_PRAS_CLAIMS),
+        channel_primary=True,
         notes=(
             "Real name Prasun Singhal, well corroborated (FFS 'Meet the Manager' feature, an "
             "official FPL/Premier League Facebook video caption, an FFH team-reveal article, "
             "BBC). No FPL ID found under that name despite checking his FFS interview article "
-            "and his co-hosts' shared channel for an embedded entry link."
+            "and his co-hosts' shared channel for an embedded entry link. `channel_primary` on "
+            "The FPL Wire: episodes are joint discussions among Pras, Zophar, and Lateriser, "
+            "not attributable to one co-host by title, so they're ingested once under Pras's "
+            "weight rather than skipped or triple-counted. A blended pod weight across all "
+            "three co-hosts is a v2 idea, not implemented here."
         ),
     ),
     Creator(
@@ -324,7 +329,10 @@ REGISTRY: list[Creator] = [
             "but that's a self-authored tagline, not third-party documentation, so left "
             "UNVERIFIED rather than promoted to DOCUMENTED — flagging this as a judgment call "
             "in case you'd rather treat strong self-reported claims the way Andy's own "
-            "season-review video was treated (see his entry above)."
+            "season-review video was treated (see his entry above). Not independently "
+            "ingested for transcripts — The FPL Wire's episodes are joint discussions with no "
+            "reliable per-co-host title split, so content flows in via the shared channel's "
+            "`channel_primary` (Pras) instead."
         ),
     ),
     Creator(
@@ -353,7 +361,9 @@ REGISTRY: list[Creator] = [
             "'Pranil Sheth'. Self-reports 'Top 200 x3' in the channel description and his own "
             "Instagram bio (repeated consistently), but per the same judgment call noted on "
             "Zophar, left UNVERIFIED rather than promoted to DOCUMENTED since it's self-report, "
-            "not third-party."
+            "not third-party. Not independently ingested for transcripts — The FPL Wire's "
+            "episodes are joint discussions with no reliable per-co-host title split, so "
+            "content flows in via the shared channel's `channel_primary` (Pras) instead."
         ),
     ),
     Creator(
@@ -430,9 +440,12 @@ REGISTRY: list[Creator] = [
         real_name=None,
         verification=Verification.UNVERIFIED,
         weight=weight_for(Verification.UNVERIFIED),
+        title_filter="FPL Salah",
         notes=_FFH_SHARED_NOTE
         + " Possibly 'Abdul Rehman' per an X bio, but not independently confirmed — left "
-        "real_name unset rather than record an unconfirmed guess.",
+        "real_name unset rather than record an unconfirmed guess. `title_filter='FPL Salah'` "
+        "attributes FFH videos to him — his persona name is distinctive enough not to "
+        "false-positive against his co-personas' names.",
     ),
     Creator(
         creator_id="fpl-hints",
@@ -457,9 +470,12 @@ REGISTRY: list[Creator] = [
         channel_match_flagged=True,
         verification=Verification.UNVERIFIED,
         weight=weight_for(Verification.UNVERIFIED),
+        title_filter="FPL Matthew",
         notes=_FFH_SHARED_NOTE
         + " (A plain search hint for 'FPL Matthew' also false-positive-matches 'FPL Mate' — "
-        "a completely unrelated, much bigger channel; don't reuse that match.)",
+        "a completely unrelated, much bigger channel; don't reuse that match.) "
+        "`title_filter='FPL Matthew'` is scoped to FFH-channel video titles only, so it's "
+        "safe here despite the FPL Mate collision risk in a plain search/description context.",
     ),
     Creator(
         creator_id="big-man-bakar",
@@ -473,9 +489,13 @@ REGISTRY: list[Creator] = [
         real_name="AbuBakar Siddiq (per X/Instagram bios)",
         verification=Verification.UNVERIFIED,
         weight=weight_for(Verification.UNVERIFIED),
+        title_filter="Bakar",
         notes=_FFH_SHARED_NOTE
         + " Self-reports 'former FPL world #4' across socials — an extraordinary claim with "
-        "no independent verification found; not scored on it (tier 2 default applies anyway).",
+        "no independent verification found; not scored on it (tier 2 default applies anyway). "
+        "`title_filter='Bakar'` (not the full 'Big Man Bakar') — his own display name is "
+        "'Big Man Bakar' but titles more reliably carry just 'Bakar' as the persona tag; "
+        "doesn't collide with 'FPL Salah' or 'FPL Matthew'.",
     ),
     Creator(
         creator_id="fpl-dylan",

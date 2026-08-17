@@ -27,6 +27,35 @@ API_BASE = "https://www.googleapis.com/youtube/v3"
 _UPLOADS_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 
 
+class YouTubeApiError(RuntimeError):
+    """Raised for a non-2xx YouTube Data API response. Always constructed
+    via `_get` so the message never contains the raw `key=...` query param —
+    see that function's docstring."""
+
+
+def _redact_key(url: str) -> str:
+    """Strip a `key=...` query param's value out of `url` so it's safe to
+    put in an exception message / log line. CLAUDE.md forbids printing
+    secrets, and `httpx.HTTPStatusError`'s default message embeds the full
+    request URL, key included."""
+    return re.sub(r"([?&]key=)[^&]*", r"\1REDACTED", url)
+
+
+def _get(url: str, params: dict) -> httpx.Response:
+    """The one place every YouTube Data API GET goes through. Wraps
+    `httpx.get` + `raise_for_status`, re-raising `httpx.HTTPStatusError` as
+    a `YouTubeApiError` whose message has the API key redacted out of the
+    URL — status code and endpoint stay visible, just not the secret."""
+    resp = httpx.get(url, params=params, timeout=15)
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise YouTubeApiError(
+            f"YouTube API request failed: {resp.status_code} {_redact_key(str(e.request.url))}"
+        ) from e
+    return resp
+
+
 class ChannelMatch(BaseModel):
     channel_id: str
     title: str
@@ -77,7 +106,7 @@ def search_top_channel(query: str) -> ChannelMatch | None:
     cache_path = _cache_path("search", query)
     cached = _read_cache(cache_path)
     if cached is None:
-        resp = httpx.get(
+        resp = _get(
             f"{API_BASE}/search",
             params={
                 "part": "snippet",
@@ -86,9 +115,7 @@ def search_top_channel(query: str) -> ChannelMatch | None:
                 "maxResults": 1,
                 "key": _api_key(),
             },
-            timeout=15,
         )
-        resp.raise_for_status()
         cached = resp.json()
         _write_cache(cache_path, cached)
 
@@ -107,16 +134,14 @@ def get_channel_by_handle(handle: str) -> ChannelMatch | None:
     cache_path = _cache_path("handle", handle)
     cached = _read_cache(cache_path)
     if cached is None:
-        resp = httpx.get(
+        resp = _get(
             f"{API_BASE}/channels",
             params={
                 "part": "snippet,statistics",
                 "forHandle": handle,
                 "key": _api_key(),
             },
-            timeout=15,
         )
-        resp.raise_for_status()
         cached = resp.json()
         _write_cache(cache_path, cached)
 
@@ -164,16 +189,14 @@ def _get_uploads_playlist_id(channel_id: str) -> str | None:
     cache_path = _cache_path("uploads-playlist", channel_id)
     cached = _read_cache(cache_path)
     if cached is None:
-        resp = httpx.get(
+        resp = _get(
             f"{API_BASE}/channels",
             params={
                 "part": "contentDetails",
                 "id": channel_id,
                 "key": _api_key(),
             },
-            timeout=15,
         )
-        resp.raise_for_status()
         cached = resp.json()
         _write_cache(cache_path, cached)
 
@@ -205,7 +228,7 @@ def list_recent_videos(channel_id: str, max_results: int = 10) -> list[VideoInfo
     )
     cached = _read_cache(cache_path) if cache_is_fresh else None
     if cached is None:
-        resp = httpx.get(
+        resp = _get(
             f"{API_BASE}/playlistItems",
             params={
                 "part": "snippet,contentDetails",
@@ -213,9 +236,7 @@ def list_recent_videos(channel_id: str, max_results: int = 10) -> list[VideoInfo
                 "maxResults": max_results,
                 "key": _api_key(),
             },
-            timeout=15,
         )
-        resp.raise_for_status()
         cached = resp.json()
         _write_cache(cache_path, cached)
 
@@ -228,16 +249,14 @@ def _get_channel_stats(channel_id: str) -> ChannelMatch | None:
     cache_path = _cache_path("channel", channel_id)
     cached = _read_cache(cache_path)
     if cached is None:
-        resp = httpx.get(
+        resp = _get(
             f"{API_BASE}/channels",
             params={
                 "part": "snippet,statistics",
                 "id": channel_id,
                 "key": _api_key(),
             },
-            timeout=15,
         )
-        resp.raise_for_status()
         cached = resp.json()
         _write_cache(cache_path, cached)
 

@@ -67,6 +67,15 @@ class Creator(BaseModel):
     subscriber_count: int | None = None
     channel_match_flagged: bool = False
 
+    # Shared-channel attribution (see `ingest.run_ingest.videos_for_creator`):
+    # on a channel shared by multiple creators, a video belongs to a creator
+    # with `title_filter` set iff EXACTLY ONE co-creator's filter (case-
+    # insensitive substring) matches its title; `channel_primary` marks the
+    # creator who ingests whatever's left unclaimed by any co-creator's
+    # filter. At most one of these should be meaningfully set per creator.
+    title_filter: str | None = None
+    channel_primary: bool = False
+
     real_name: str | None = None
     fpl_team_id: int | None = None
     fpl_team_name: str | None = None
