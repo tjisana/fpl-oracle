@@ -55,6 +55,13 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       composite-key resolver (rapidfuzz on name, validated against team+position)
 - [ ] Extraction prompt + Claude structured-output call
 - [ ] Run across all available "My GW1 Team" videos; review match quality
+- [ ] SELF_CLAIMED harvest sweep (MUST land before the GW1 weight freeze, else
+      it waits a year): for every creator, locate season-review / season-opener
+      videos by title, fetch transcripts (existing `ingest/` machinery), have
+      Claude extract rank claims (quote + timestamp), then OWNER APPROVES each
+      claim before it enters `roster/registry.py`. Evens the playing field —
+      Andy's entry got this treatment manually; the other 19 haven't (selective
+      evidence-gathering is itself a bias). No auto-writes to the trust model.
 
 ## Phase 3 — Consensus + solver (day 5)
 - [ ] `consensus/scoring.py`: weighted per-player scores from picks,
