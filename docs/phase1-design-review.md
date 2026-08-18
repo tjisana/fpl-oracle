@@ -269,3 +269,38 @@ says the opposite. Caught by the test-writing subagent on day one,
 ruled a stale comment (constant kept, example corrected to top-300k).
 Lesson kept: design-rationale comments get audited like code, because
 they're where the next reader learns what the constants *mean*.
+
+### 2b. What the human approval step actually is (and isn't)
+
+A refinement from the review conversation, after the owner pointed out
+that a human cannot actually fact-check a creator's rank claim (no API
+access; screenshots and articles prove nothing). Correct — and the
+system never needed that. Four questions, four different answerers:
+
+1. **Was the claim made?** — machine's job. A verbatim quote must
+   exact-substring-match the stored transcript (mechanical string check,
+   no LLM). Kills fabricated and misread claims. In Andy's case there
+   was true *corroboration* — the claim originally entered from a search
+   snippet (secondary source) and was later confirmed against the video
+   transcript (primary source). Future harvested claims have no second
+   source; the transcript IS the source, and the substring check only
+   proves faithful reading, not truth.
+2. **Is the claim true?** — nobody's job, because nobody can do it.
+   Priced in structurally instead: the tier is *named* SELF_CLAIMED and
+   shrunk 0.75. Softer deterrent: public, specific, on-record claims
+   pinned to a creator whose product is credibility.
+3. **Is our interpretation right?** — the owner's job, and the only
+   human step: overall classic rank (not mini-league/draft/points)? the
+   creator speaking (not a guest/quote)? admissibly specific? Judged
+   from quote + timestamp + link in seconds — never by rereading
+   transcripts.
+4. **What if a lie gets through?** — the architecture's job. One
+   fraudulent megaphone among twenty is diluted by aggregation; lies
+   don't compound in a consensus system. (The owner's old process —
+   trusting one creator — had no such insurance.)
+
+Also settled here: LLM extraction risk is not "can it read" (it reads
+fine) but interpretation-in-context — mangled entities ("Harland",
+"Echot", "gaming" for gameweek), attribution in unlabeled group
+transcripts, and ambiguous referents. The quote-anchoring rule plus the
+owner's interpretation glance target exactly those.
