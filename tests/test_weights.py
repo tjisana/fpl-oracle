@@ -2,7 +2,7 @@
 
 All expected values below are hand-derived from the module's own formulas
 (log-rank scoring against the 10,000,000-size pool, the recency weights
-[1.0, 0.6, 0.3], and the documented-tier shrink/bonus/floor), not copied
+[1.0, 0.6, 0.3], and the claim-tier shrinks/bonus/floor), not copied
 from the implementation, so they'll catch a regression in the arithmetic.
 """
 
@@ -17,6 +17,7 @@ from fpl_oracle.roster.registry import REGISTRY
 from fpl_oracle.roster.weights import (
     DEFAULT_TIER2_WEIGHT,
     compute_documented_weight,
+    compute_self_claimed_weight,
     compute_weight,
     weight_for,
 )
@@ -134,6 +135,54 @@ class TestComputeDocumentedWeight:
         assert compute_documented_weight(claims) == pytest.approx(0.7540714285714286)
 
 
+class TestComputeSelfClaimedWeight:
+    def test_empty_list_returns_default(self) -> None:
+        assert compute_self_claimed_weight([]) == DEFAULT_TIER2_WEIGHT
+
+    def test_single_claim_no_consistency_bonus(self) -> None:
+        # Same shape as compute_documented_weight's equivalent test, but on
+        # SELF_CLAIMED_SHRINK (0.75): (6/7) * 0.75.
+        claims = [ClaimedFinish(description="x", rank=10, source_url="u", count=1)]
+        assert compute_self_claimed_weight(claims) == pytest.approx(0.6428571428571429)
+
+    def test_floor_applies_for_weak_claim(self) -> None:
+        # Mirrors compute_documented_weight's floor case: a near-bottom-of-
+        # pool rank must still floor at DEFAULT_TIER2_WEIGHT, not score
+        # below "no evidence at all".
+        claims = [ClaimedFinish(description="x", rank=9_000_000, source_url="u", count=1)]
+        assert compute_self_claimed_weight(claims) == pytest.approx(DEFAULT_TIER2_WEIGHT)
+
+    def test_best_score_and_bonus_capped_at_one_before_shrink(self) -> None:
+        # Mirrors compute_documented_weight's cap case: rank=1 -> best score
+        # 1.0, count=6 -> bonus 0.15, but min(1.0, ...) must clamp the sum to
+        # 1.0 before shrink: exactly 1.0 * SELF_CLAIMED_SHRINK = 0.75, not
+        # 1.15 * 0.75.
+        claims = [ClaimedFinish(description="x", rank=1, source_url="u", count=6)]
+        assert compute_self_claimed_weight(claims) == pytest.approx(0.75)
+
+
+class TestEvidenceOrdering:
+    def test_documented_beats_self_claimed_beats_default_for_same_claim(self) -> None:
+        # Same single claim (rank=10, strong enough to clear the floor
+        # under both shrinks) run through both claim-based tiers: the more
+        # corroborated tier must score strictly higher, and even the
+        # weaker (self-claimed) tier must still beat "no evidence at all".
+        claims = [ClaimedFinish(description="x", rank=10, source_url="u", count=1)]
+        documented = compute_documented_weight(claims)
+        self_claimed = compute_self_claimed_weight(claims)
+        assert documented > self_claimed > DEFAULT_TIER2_WEIGHT
+
+    def test_ordering_partially_collapses_when_self_claimed_hits_floor(self) -> None:
+        # In the band where the raw score clears the floor under the 0.85
+        # shrink but not the 0.75 one, the ordering intentionally degrades
+        # to documented > self_claimed == default. rank=200_000: raw score
+        # 1 - log10(2e5)/7 ~= 0.24271; documented 0.24271*0.85 ~= 0.20630,
+        # self-claimed 0.24271*0.75 ~= 0.18203 -> floored to 0.2.
+        claims = [ClaimedFinish(description="x", rank=200_000, source_url="u", count=1)]
+        assert compute_documented_weight(claims) == pytest.approx(0.2063035005265164)
+        assert compute_self_claimed_weight(claims) == pytest.approx(DEFAULT_TIER2_WEIGHT)
+
+
 class TestWeightFor:
     def test_api_verification_routes_to_compute_weight(self) -> None:
         finishes = [PastFinish(season_name="2023/24", rank=10)]
@@ -153,13 +202,47 @@ class TestWeightFor:
         assert weight_for(Verification.DOCUMENTED, documented_finishes=None) == DEFAULT_TIER2_WEIGHT
         assert weight_for(Verification.DOCUMENTED, documented_finishes=[]) == DEFAULT_TIER2_WEIGHT
 
+    def test_self_claimed_verification_routes_to_compute_self_claimed_weight(self) -> None:
+        claims = [ClaimedFinish(description="x", rank=10, source_url="u", count=1)]
+        assert weight_for(
+            Verification.SELF_CLAIMED, self_claimed_finishes=claims
+        ) == compute_self_claimed_weight(claims)
+
+    def test_self_claimed_verification_with_no_claims_uses_default(self) -> None:
+        assert (
+            weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=None)
+            == DEFAULT_TIER2_WEIGHT
+        )
+        assert (
+            weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=[]) == DEFAULT_TIER2_WEIGHT
+        )
+
+    def test_self_claimed_verification_ignores_extraneous_other_tier_data(self) -> None:
+        # Extraneous data for the "wrong" tiers must be ignored, not
+        # consulted, when dispatching on SELF_CLAIMED.
+        finishes = [PastFinish(season_name="2023/24", rank=1)]
+        documented_claims = [ClaimedFinish(description="x", rank=1, source_url="u", count=10)]
+        self_claims = [ClaimedFinish(description="x", rank=10, source_url="u", count=1)]
+        assert weight_for(
+            Verification.SELF_CLAIMED,
+            past_finishes=finishes,
+            documented_finishes=documented_claims,
+            self_claimed_finishes=self_claims,
+        ) == compute_self_claimed_weight(self_claims)
+
     def test_unverified_returns_default_regardless_of_inputs(self) -> None:
         finishes = [PastFinish(season_name="2023/24", rank=1)]
         claims = [ClaimedFinish(description="x", rank=1, source_url="u", count=10)]
+        self_claims = [ClaimedFinish(description="x", rank=1, source_url="u", count=10)]
         assert weight_for(Verification.UNVERIFIED) == DEFAULT_TIER2_WEIGHT
         # Extraneous data for the "wrong" tier must be ignored, not consulted.
         assert (
-            weight_for(Verification.UNVERIFIED, past_finishes=finishes, documented_finishes=claims)
+            weight_for(
+                Verification.UNVERIFIED,
+                past_finishes=finishes,
+                documented_finishes=claims,
+                self_claimed_finishes=self_claims,
+            )
             == DEFAULT_TIER2_WEIGHT
         )
 

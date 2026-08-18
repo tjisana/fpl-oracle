@@ -27,11 +27,20 @@ class Verification(StrEnum):
       Fantasy Football Scout, ...) has publicly documented specific
       finishes for this person under their real name. Weighted strongly
       but shrunk relative to API since it isn't independently pullable.
-    - UNVERIFIED: neither of the above. Default low weight.
+    - SELF_CLAIMED: the creator's own on-record claim about their past
+      ranks (their own video or screenshot), not corroborated by any
+      third party. Admissible only when specific — an exact-ish rank, a
+      season, and their own named account, on the record (not a vague
+      tagline). Discounted more than DOCUMENTED: a self-report can
+      cherry-pick its best seasons with nothing to check it against,
+      whereas even an informal third party curates at least a little
+      before publishing a specific number under someone's name.
+    - UNVERIFIED: none of the above. Default low weight.
     """
 
     API = "api"
     DOCUMENTED = "documented"
+    SELF_CLAIMED = "self_claimed"
     UNVERIFIED = "unverified"
 
 
@@ -43,8 +52,9 @@ class PastFinish(BaseModel):
 
 
 class ClaimedFinish(BaseModel):
-    """A finish claimed by a reputable third-party source rather than
-    pulled from the FPL API directly (Verification.DOCUMENTED). `rank` is
+    """A finish claimed somewhere other than the FPL API — by a reputable
+    third party (Verification.DOCUMENTED) or by the creator themselves on
+    the record (Verification.SELF_CLAIMED). `rank` is
     a conservative representative value for a qualitative claim (e.g. "a
     top-10k finish" -> rank=10_000), not asserted as an exact rank.
     `count` is how many separate seasons/finishes the claim represents
@@ -82,6 +92,7 @@ class Creator(BaseModel):
     verification: Verification = Verification.UNVERIFIED
     past_finishes: list[PastFinish] = []
     documented_finishes: list[ClaimedFinish] = []
+    self_claimed_finishes: list[ClaimedFinish] = []
 
     weight: float | None = None
     notes: str | None = None

@@ -17,13 +17,19 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       reassigned to an unrelated manager — a standing risk, not a one-off; see
       `roster/registry.py` module docstring). Added a `Verification.DOCUMENTED` tier for
       creators BBC/FFS have publicly attributed specific finishes to under their real name —
-      6/20 qualify and sit at `Tier.CORE`; the other 14 are `Tier.SECONDARY` at the default
-      weight. Full per-creator sourcing in `roster/registry.py` notes.
-- [x] `roster/weights.py`: `compute_weight()` (API tier) + `compute_documented_weight()`
-      (documented tier) + `weight_for()` dispatcher — unit-tested in
-      `tests/test_weights.py` (24 tests: formula math, band boundaries, caps/floors,
-      dispatcher routing); still unexercised on real API history since no one has a
-      verified ID yet.
+      5/20 qualify. A `Verification.SELF_CLAIMED` tier also exists for a creator's own
+      on-record self-reported finishes (their own screenshot/intro video, no third party),
+      shrunk harder (0.75 vs DOCUMENTED's 0.85) for self-report selection bias; Andy (Let's
+      Talk FPL) was reclassified from DOCUMENTED to SELF_CLAIMED for his own season-review
+      video's claim — the honest tier for that evidence. So 5 DOCUMENTED + 1 SELF_CLAIMED =
+      6/20 sit at `Tier.CORE`; the other 14 are `Tier.SECONDARY` at the default weight. Full
+      per-creator sourcing in `roster/registry.py` notes.
+- [x] `roster/weights.py`: `compute_weight()` (API tier) + `compute_documented_weight()` +
+      `compute_self_claimed_weight()` (claim-based tiers, sharing a `_claimed_weight()`
+      helper) + `weight_for()` dispatcher — unit-tested in `tests/test_weights.py` (formula
+      math, band boundaries, caps/floors, dispatcher routing, evidence-ordering invariant
+      across tiers); still unexercised on real API history since no one has a verified ID
+      yet.
 - [x] Transcript ingestion working end-to-end on 3 videos — `ingest/transcripts.py`
       (fetch/save/load, on-disk cache doubling as the read-through store) +
       `ingest/youtube_client.list_recent_videos` (uploads-playlist resolution, 6h-fresh

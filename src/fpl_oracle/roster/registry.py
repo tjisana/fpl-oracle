@@ -19,18 +19,39 @@ story):
 Result: real names are now solid for most of tier 1, and a `Verification.
 DOCUMENTED` tier was added for creators a reputable third party (BBC,
 FFS) has publicly attributed specific finishes to under their real name,
-even without a pullable ID. But **0 of 20 still have an API-verified ID**
-— every fresh candidate this pass also failed live verification, in a
-few cases because a years-old article's entry ID has since come to
-belong to a completely different, unrelated manager (see notes below;
-worth remembering as a standing risk, not just a one-off). Institutional
-brands (Fantasy Football Scout, Fantasy Football Hub) were dropped
-entirely per the owner's instruction — no person, no track record, no
-Tier.CORE claim. Three "creators" (FPL Salah, FPL Matthew, Big Man
-Bakar) turned out to be recurring on-camera personas whose content is
-actually produced on Fantasy Football Hub's own channel, not a personal
-one — flagged below; ingestion will need title-based filtering, not a
-per-creator channel_id, if picked up later.
+even without a pullable ID. A `Verification.SELF_CLAIMED` tier exists
+alongside it for the narrower case of a creator's own on-record claim
+about their past ranks (their own video/screenshot, no third party) —
+admissible only when specific, and weighted with a steeper discount than
+DOCUMENTED for the obvious self-report selection bias (see
+`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 1 (Andy,
+see below) as SELF_CLAIMED — all 6 at `Tier.CORE`; the other 14 are
+`Tier.SECONDARY` at the default weight. But **0 of 20 still have an
+API-verified ID** — every fresh candidate this pass also failed live
+verification, in a few cases because a years-old article's entry ID has
+since come to belong to a completely different, unrelated manager (see
+notes below; worth remembering as a standing risk, not just a one-off).
+
+The mechanism behind that, now understood rather than just observed:
+FPL entry IDs are assigned PER-SEASON — every manager registers fresh
+each season and IDs are handed out sequentially from wherever that
+season's counter starts, they aren't a persistent per-person identifier
+that carries across years. So an old article's ID pointing at a
+complete stranger isn't bad luck or a typo, it's structural: that
+numeric ID almost certainly belonged to someone else once the season
+rolled over. The same logic caps what a *self*-disclosed ID is worth,
+too — even a creator's own claimed ID (e.g. in a video description)
+only verifies anything for the season in which it was disclosed; it
+can't be assumed to be the same ID in a different season without a
+fresh, contemporaneous check.
+
+Institutional brands (Fantasy Football Scout, Fantasy Football Hub) were
+dropped entirely per the owner's instruction — no person, no track
+record, no Tier.CORE claim. Three "creators" (FPL Salah, FPL Matthew,
+Big Man Bakar) turned out to be recurring on-camera personas whose
+content is actually produced on Fantasy Football Hub's own channel, not
+a personal one — flagged below; ingestion will need title-based
+filtering, not a per-creator channel_id, if picked up later.
 
 A caution surfaced this pass, worth keeping in mind generally: at least
 one web-search/fetch tool call returned a plausible-looking table of FPL
@@ -48,15 +69,28 @@ _BBC_FPL_EXPERTS = "https://feeds.bbci.co.uk/sport/articles/c4gj7pl3p82o"
 _FFS_PRO_PUNDITS = "https://www.fantasyfootballscout.co.uk/the-ffs-pro-pundits"
 _ANDY_SEASON_REVIEW = "https://www.youtube.com/watch?v=UW85Hel20QE"
 
-_ANDY_CLAIMS = [
+_ANDY_SELF_CLAIMS = [
     ClaimedFinish(
         description="588th overall, 2025/26 season (stated in his own season-review video; "
-        "only corroborated at search-snippet level, not a direct read of the video itself "
-        "— worth a human spot-check of the primary source)",
+        "corroborated 2026-08-17 against the video's own auto-generated transcript via "
+        "ingest.transcripts — exact phrase: 'my final rank and where i finished for the "
+        "2025/26 season is 588th in the world')",
         rank=588,
         source_url=_ANDY_SEASON_REVIEW,
         count=1,
-    )
+    ),
+    ClaimedFinish(
+        description="four further top-10k finishes across his 16 seasons (five total per "
+        "his own recap, minus the 588 already claimed above to avoid double-counting; "
+        "previous best 1,294, another at 9,975; one more just outside at ~10,400 NOT "
+        "counted). Same season-review transcript as above. Honesty note the claim tier "
+        "doesn't price in: his most recent pre-588 run was declining (35k, 44k, 77k) — "
+        "claim-based weights score best + consistency with no recency term, same as "
+        "every other claim-tier creator.",
+        rank=10_000,
+        source_url=_ANDY_SEASON_REVIEW,
+        count=4,
+    ),
 ]
 _PRAS_CLAIMS = [
     ClaimedFinish(
@@ -144,15 +178,18 @@ REGISTRY: list[Creator] = [
         channel_title="Let's Talk FPL",
         subscriber_count=501_000,
         real_name="Andy Mears",
-        verification=Verification.DOCUMENTED,
-        documented_finishes=_ANDY_CLAIMS,
-        weight=weight_for(Verification.DOCUMENTED, documented_finishes=_ANDY_CLAIMS),
+        verification=Verification.SELF_CLAIMED,
+        self_claimed_finishes=_ANDY_SELF_CLAIMS,
+        weight=weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=_ANDY_SELF_CLAIMS),
         notes=(
             "Real name Andy Mears — corroborated by 3 independent sources (a podcast interview "
             "title, his solo.to link page, and his personal YouTube handle @andymears501). No "
             "FPL entry ID found/verified despite dedicated searching (entry 40, the one prior "
-            "candidate, is confirmed unrelated — Korn Supatrabutra). Documented tier rests on "
-            "his own season-review video's claim; see the caveat on that claim above."
+            "candidate, is confirmed unrelated — Korn Supatrabutra). SELF_CLAIMED tier (not "
+            "DOCUMENTED): the 588th-overall claim comes from his own season-review video, not "
+            "a third party, so it's scored on the steeper SELF_CLAIMED_SHRINK to account for "
+            "self-report selection bias; the claim is otherwise elite and specific enough to "
+            "keep him at Tier.CORE. See the sourcing caveat on the claim itself above."
         ),
     ),
     Creator(
