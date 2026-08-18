@@ -62,6 +62,12 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       claim before it enters `roster/registry.py`. Evens the playing field —
       Andy's entry got this treatment manually; the other 19 haven't (selective
       evidence-gathering is itself a bias). No auto-writes to the trust model.
+      QUOTE-ANCHORING RULE: every extracted claim must carry a verbatim quote
+      that a script verifies is an exact substring of the stored transcript
+      (kills fabricated/misread claims mechanically, no LLM in the check);
+      the owner then judges only interpretation (overall classic rank? the
+      creator speaking, not a guest? admissibly specific?) from quote +
+      timestamp + link — never by rereading whole transcripts.
 
 ## Phase 3 — Consensus + solver (day 5)
 - [ ] `consensus/scoring.py`: weighted per-player scores from picks,
