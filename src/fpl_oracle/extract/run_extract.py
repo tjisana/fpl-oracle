@@ -53,6 +53,12 @@ GW1_TITLE_PATTERNS = (
     "my team",
     "team selection",
     "final team",
+    # Titles often wedge "fpl" between the words ("FPL Salah's FINAL FPL
+    # Team") — caught live on the FFH personas, whose reveals this style
+    # of title would otherwise hide from the substring patterns above.
+    "final fpl team",
+    "my fpl team",
+    "fpl team reveal",
     "wildcard",
     # "draft" is deliberately absent: FPL Draft is a different game mode
     # whose picks would poison classic-mode consensus, and GW1 reveal
