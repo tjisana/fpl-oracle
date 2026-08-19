@@ -49,8 +49,15 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       existing `tests/test_transcripts.py`.
 
 ## Phase 2 — Extraction (days 3–4)
-- [ ] `extract/schemas.py`: Pick / VideoExtraction Pydantic models
-      (incl. composite key: name + inferred team + inferred position; and `time_horizon`)
+- [x] `extract/schemas.py`: Pick / VideoExtraction Pydantic models — composite key
+      (name_raw + inferred team + inferred position), `time_horizon` (1–38),
+      conviction 1–5, required personal-vs-group `provenance` flag (Phase 1
+      carry-over). Reviewed + merged. Notes for the extraction call: LLM emits
+      picks + gameweek ONLY (pipeline fills video metadata — never let the model
+      parrot identifiers), and the call needs a retry-on-ValidationError loop so
+      one over-long `reasoning` sentence can't drop a whole video's picks.
+      Player-less chip-timing plans ("wildcard GW8") are knowingly out of
+      v1 extraction scope.
 - [ ] `fpl/client.py` + `fpl/players.py`: bootstrap-static client, player DB,
       composite-key resolver (rapidfuzz on name, validated against team+position)
 - [ ] Extraction prompt + Claude structured-output call
