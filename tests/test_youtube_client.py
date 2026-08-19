@@ -1,6 +1,7 @@
-"""Unit tests for fpl_oracle.ingest.youtube_client's error handling —
-specifically that the YouTube API key never leaks into an exception
-message when a request fails (CLAUDE.md: never print secrets)."""
+"""Unit tests for fpl_oracle.ingest.youtube_client: error handling
+(specifically that the YouTube API key never leaks into an exception
+message when a request fails — CLAUDE.md: never print secrets) and the
+pure ISO-8601 duration parser used by the min-duration Shorts filter."""
 
 from __future__ import annotations
 
@@ -58,3 +59,30 @@ class TestGetRaisesRedactedError:
 
         result = youtube_client._get(url, params={"id": "abc", "key": "SECRETVALUE"})
         assert result.json() == {"items": []}
+
+
+class TestParseIso8601Duration:
+    def test_minutes_and_seconds(self) -> None:
+        assert youtube_client.parse_iso8601_duration("PT1M30S") == 90
+
+    def test_hours_minutes_seconds(self) -> None:
+        assert youtube_client.parse_iso8601_duration("PT1H2M3S") == 3723
+
+    def test_seconds_only(self) -> None:
+        assert youtube_client.parse_iso8601_duration("PT45S") == 45
+
+    def test_hours_only(self) -> None:
+        assert youtube_client.parse_iso8601_duration("PT2H") == 7200
+
+    def test_minutes_only(self) -> None:
+        assert youtube_client.parse_iso8601_duration("PT10M") == 600
+
+    def test_days_component(self) -> None:
+        assert youtube_client.parse_iso8601_duration("P1DT2H") == 86400 + 7200
+
+    def test_zero_duration(self) -> None:
+        assert youtube_client.parse_iso8601_duration("PT0S") == 0
+
+    def test_unrecognized_format_raises(self) -> None:
+        with pytest.raises(ValueError):
+            youtube_client.parse_iso8601_duration("not-a-duration")

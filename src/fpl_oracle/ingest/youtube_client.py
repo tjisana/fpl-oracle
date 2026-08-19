@@ -26,6 +26,15 @@ API_BASE = "https://www.googleapis.com/youtube/v3"
 # files older than this when deciding whether to hit the network again.
 _UPLOADS_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 
+# playlistItems.list and videos.list both cap out at 50 ids/items per
+# request — used to page/batch requests that need more than that.
+_API_PAGE_SIZE = 50
+
+_ISO8601_DURATION_RE = re.compile(
+    r"^P(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
+)
+
 
 class YouTubeApiError(RuntimeError):
     """Raised for a non-2xx YouTube Data API response. Always constructed
@@ -243,6 +252,117 @@ def list_recent_videos(channel_id: str, max_results: int = 10) -> list[VideoInfo
     videos = _parse_playlist_items(cached, channel_id)
     videos.sort(key=lambda v: v.published_at, reverse=True)
     return videos[:max_results]
+
+
+def list_uploads(channel_id: str, max_results: int = 75) -> list[VideoInfo]:
+    """List up to `max_results` of a channel's uploads, newest first,
+    paging through `playlistItems.list` (each page holds at most
+    `_API_PAGE_SIZE` items, the API's max) until either `max_results` is
+    reached or the channel runs out of uploads.
+
+    A sibling to `list_recent_videos` for callers that need to look
+    further back than the freshest handful — e.g. the SELF_CLAIMED
+    harvest sweep in `roster/harvest.py`, which looks for season-review
+    videos that are typically 2-3 months old by the time it runs, well
+    outside `list_recent_videos`'s default page.
+
+    Same 6h-freshness cache override as `list_recent_videos`, but keyed
+    by `(channel_id, max_results)` rather than `channel_id` alone — a
+    call asking for a deeper listing than what's cached always refetches
+    (a shallower cached page can't answer a deeper request), while a
+    call asking for the same or a shallower depth than an existing fresh
+    cache reuses it.
+    """
+    playlist_id = _get_uploads_playlist_id(channel_id)
+    if playlist_id is None:
+        return []
+
+    cache_path = _cache_path(f"uploads-deep-{max_results}", channel_id)
+    cache_is_fresh = (
+        cache_path.exists()
+        and (time.time() - cache_path.stat().st_mtime) < _UPLOADS_CACHE_MAX_AGE_SECONDS
+    )
+    cached = _read_cache(cache_path) if cache_is_fresh else None
+    if cached is None:
+        items: list[dict] = []
+        page_token: str | None = None
+        while len(items) < max_results:
+            params = {
+                "part": "snippet,contentDetails",
+                "playlistId": playlist_id,
+                "maxResults": min(_API_PAGE_SIZE, max_results - len(items)),
+                "key": _api_key(),
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = _get(f"{API_BASE}/playlistItems", params=params)
+            page = resp.json()
+            items.extend(page.get("items", []))
+            page_token = page.get("nextPageToken")
+            if not page_token:
+                break
+        cached = {"items": items}
+        _write_cache(cache_path, cached)
+
+    videos = _parse_playlist_items(cached, channel_id)
+    videos.sort(key=lambda v: v.published_at, reverse=True)
+    return videos[:max_results]
+
+
+def parse_iso8601_duration(duration: str) -> int:
+    """Parse a YouTube `contentDetails.duration` ISO-8601 duration string
+    (e.g. "PT1M30S", "PT1H2M3S", "PT45S") into whole seconds.
+
+    Pure, no I/O — YouTube durations only ever carry day/hour/minute/
+    second components (no months/years, videos aren't that long), so
+    that's all this parses; anything else raises `ValueError`.
+    """
+    match = _ISO8601_DURATION_RE.match(duration)
+    if not match:
+        raise ValueError(f"Unrecognized ISO-8601 duration: {duration!r}")
+    parts = match.groupdict()
+    days = int(parts["days"] or 0)
+    hours = int(parts["hours"] or 0)
+    minutes = int(parts["minutes"] or 0)
+    seconds = int(parts["seconds"] or 0)
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def get_video_durations(video_ids: list[str]) -> dict[str, int]:
+    """Fetch each video's duration in seconds via `videos.list`
+    part=contentDetails. Cached indefinitely per video id, like channel
+    lookups — a published video's duration never changes.
+
+    Ids already cached are served from disk; the rest are batched into
+    `videos.list` calls of up to `_API_PAGE_SIZE` ids each (the API's
+    max for a single request). Returns a dict rather than a list since a
+    video that YouTube doesn't return (deleted/private) simply won't have
+    a key — callers shouldn't assume every input id comes back.
+    """
+    durations: dict[str, int] = {}
+    missing: list[str] = []
+    for video_id in video_ids:
+        cache_path = _cache_path("duration", video_id)
+        cached = _read_cache(cache_path)
+        if cached is not None and "duration_s" in cached:
+            durations[video_id] = cached["duration_s"]
+        else:
+            missing.append(video_id)
+
+    for i in range(0, len(missing), _API_PAGE_SIZE):
+        batch = missing[i : i + _API_PAGE_SIZE]
+        resp = _get(
+            f"{API_BASE}/videos",
+            params={"part": "contentDetails", "id": ",".join(batch), "key": _api_key()},
+        )
+        data = resp.json()
+        for item in data.get("items", []):
+            video_id = item["id"]
+            seconds = parse_iso8601_duration(item["contentDetails"]["duration"])
+            durations[video_id] = seconds
+            _write_cache(_cache_path("duration", video_id), {"duration_s": seconds})
+
+    return durations
 
 
 def _get_channel_stats(channel_id: str) -> ChannelMatch | None:
