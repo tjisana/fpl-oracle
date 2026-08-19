@@ -24,10 +24,10 @@ alongside it for the narrower case of a creator's own on-record claim
 about their past ranks (their own video/screenshot, no third party) —
 admissible only when specific, and weighted with a steeper discount than
 DOCUMENTED for the obvious self-report selection bias (see
-`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 2 (Andy and
-FPL Raptor, the latter promoted 2026-08-19 by the owner-approved harvest
-sweep) as SELF_CLAIMED — all 7 at `Tier.CORE`; the other 13 are
-`Tier.SECONDARY` at the default weight. But **0 of 20 still have an
+`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 3 (Andy,
+FPL Raptor and FPL Harry — the latter two promoted 2026-08-19 by the
+owner-approved harvest sweep) as SELF_CLAIMED — all 8 at `Tier.CORE`;
+the other 12 are `Tier.SECONDARY` at the default weight. But **0 of 20 still have an
 API-verified ID** — every fresh candidate this pass also failed live
 verification, in a few cases because a years-old article's entry ID has
 since come to belong to a completely different, unrelated manager (see
@@ -70,6 +70,33 @@ _BBC_FPL_EXPERTS = "https://feeds.bbci.co.uk/sport/articles/c4gj7pl3p82o"
 _FFS_PRO_PUNDITS = "https://www.fantasyfootballscout.co.uk/the-ffs-pro-pundits"
 _ANDY_SEASON_REVIEW = "https://www.youtube.com/watch?v=UW85Hel20QE"
 _RAPTOR_SEASON_GUIDE = "https://www.youtube.com/watch?v=c1MyHESd5pA&t=111"
+_HARRY_SEASON_REVIEW = "https://www.youtube.com/watch?v=lNnB4-KxC_A&t=259"
+
+_HARRY_SELF_CLAIMS = [
+    ClaimedFinish(
+        description="five consecutive top-10k finishes (the five seasons preceding 2025/26), "
+        "stated in his own season-review video at 4:19 — exact phrase: 'i finished in the top "
+        "10k every single season for the past five years before this one'. Quote verified as an "
+        "exact substring of the stored transcript by the harvest sweep (roster.claim_verify). "
+        "Independently corroborated: the Phase 1 research pass separately recorded him "
+        "self-reporting 'seven top-15k, five consecutive top-10k' — two independent sources, "
+        "same five-season claim.",
+        rank=10_000,
+        source_url=_HARRY_SEASON_REVIEW,
+        count=5,
+    ),
+    ClaimedFinish(
+        description="~26,000th overall, 2025/26 season — exact phrase: 'five top 10k finishes "
+        "and now a 26k, which is still great'. CREDIBILITY NOTE (argues FOR the tier, not "
+        "against): he volunteers his bad seasons unprompted in the same video — a 750k worst "
+        "season (2017/18) and a first season 'just outside the top 10K' (2016/17) — and is "
+        "careful to say 8 more points would have made 23k, i.e. that this was NOT a top-25k "
+        "finish. Precision against his own interest, the opposite of self-report inflation.",
+        rank=26_000,
+        source_url=_HARRY_SEASON_REVIEW,
+        count=1,
+    ),
+]
 
 _RAPTOR_SELF_CLAIMS = [
     ClaimedFinish(
@@ -214,15 +241,19 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-harry",
         name="FPL Harry",
         youtube_hint="FPL Harry",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCcPWnCj5AKC19HaySZjb25g",
         channel_title="FPL Harry",
         subscriber_count=233_000,
         real_name=None,
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        verification=Verification.SELF_CLAIMED,
+        self_claimed_finishes=_HARRY_SELF_CLAIMS,
+        weight=weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=_HARRY_SELF_CLAIMS),
         notes=(
-            "NEAR MISS, worth a human follow-up: real name unconfirmed (a business email "
+            "Promoted UNVERIFIED -> SELF_CLAIMED by the harvest sweep (owner-approved "
+            "2026-08-19); his own season-review video claims five consecutive top-10k "
+            "finishes plus a ~26k 2025/26. Entry-ID research below is unchanged and still "
+            "unresolved. NEAR MISS, worth a human follow-up: real name unconfirmed (a business email "
             "suggested 'Harry Daniels' but that's unverified — could just be an agency "
             "contact), BUT Fantasy Football Scout's own recurring gameweek-recap article "
             "series explicitly attributes entry 1320 to 'FPL Harry' by name in a specific, "
