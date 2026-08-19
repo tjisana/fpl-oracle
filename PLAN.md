@@ -68,7 +68,16 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       verified, merged. On the first real batch run: verify cache_read_input_tokens > 0
       (system prompt sits just above the 512-token cache minimum).
 - [ ] Run across all available "My GW1 Team" videos; review match quality
-- [ ] SELF_CLAIMED harvest sweep (MUST land before the GW1 weight freeze, else
+- [ ] SELF_CLAIMED harvest sweep — INFRASTRUCTURE MERGED (reviewed + verified):
+      `roster/harvest.py` (season-review title matcher, 200-deep/May-1-cutoff uploads
+      paging, transcript fetch via existing ingest machinery, manifest),
+      `roster/claim_verify.py` (mechanical casefolded exact-substring quote check),
+      `roster/claims.py` (RankClaimCandidate + owner-review markdown with approve
+      checkboxes + timestamped links). Also landed: min-duration Shorts filter in
+      ingest (180s, non-fatal on API failure) — the Phase 1 carry-over. REMAINING:
+      the Claude rank-claim extraction call (main session owns the prompt), the full
+      20-creator live sweep, then OWNER APPROVAL of each claim. Original task spec
+      follows. (MUST land before the GW1 weight freeze, else
       it waits a year): for every creator, locate season-review / season-opener
       videos by title, fetch transcripts (existing `ingest/` machinery), have
       Claude extract rank claims (quote + timestamp), then OWNER APPROVES each

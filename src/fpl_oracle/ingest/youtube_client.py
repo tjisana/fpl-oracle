@@ -90,11 +90,11 @@ def _cache_path(kind: str, key: str) -> Path:
 
 
 def _slug_preserving_case(text: str) -> str:
-    """Like `_slug`, but doesn't lowercase — for cache keys (like YouTube
-    video ids, which are case-sensitive base64url-ish strings) where
-    `_slug`'s lowercasing could collide two distinct keys that differ
-    only in case onto the same cache file."""
-    return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")
+    """Like `_slug`, but doesn't lowercase and keeps `-`/`_` distinct — for
+    cache keys (like YouTube video ids, which are case-sensitive base64url
+    strings using both `-` and `_`) where `_slug`'s normalization could
+    collide two distinct keys onto the same cache file."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", text).strip("-")
 
 
 def _cache_path_preserving_case(kind: str, key: str) -> Path:
