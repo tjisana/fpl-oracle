@@ -18,12 +18,25 @@ from rich.console import Console
 from rich.table import Table
 
 from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript, save_transcript
-from fpl_oracle.ingest.youtube_client import VideoInfo, list_recent_videos
+from fpl_oracle.ingest.youtube_client import (
+    VideoInfo,
+    YouTubeApiError,
+    get_video_durations,
+    list_recent_videos,
+)
 from fpl_oracle.roster.models import Creator
 from fpl_oracle.roster.registry import REGISTRY
 
 TARGET_TRANSCRIPT_COUNT = 3
 VIDEOS_PER_CHANNEL = 10
+
+# Below this, a video is treated as a YouTube Short, not pick content, and
+# is dropped from selection regardless of title — carry-over design
+# decision from the Phase 1 design review. 180s is generous (a genuine
+# Short is capped at 60-183s depending on when it was uploaded); the goal
+# is only to keep obvious Shorts out, not to second-guess borderline
+# longer clips.
+MIN_DURATION_S = 180
 
 console = Console()
 
@@ -94,6 +107,24 @@ def videos_for_creator(
     return list(videos)
 
 
+def filter_min_duration(
+    videos: list[VideoInfo],
+    durations: dict[str, int],
+    min_duration_s: int = MIN_DURATION_S,
+) -> list[VideoInfo]:
+    """Drop videos shorter than `min_duration_s` (YouTube Shorts) from
+    `videos`. Pure — takes a pre-fetched `durations` map (video_id ->
+    seconds, as returned by `youtube_client.get_video_durations`) rather
+    than doing I/O itself, so it's unit-testable without the network.
+
+    A video missing from `durations` (duration lookup failed, or wasn't
+    attempted for it) is KEPT, not dropped — this filter only removes
+    videos it positively knows are too short; it never treats "unknown"
+    as "short".
+    """
+    return [v for v in videos if durations.get(v.video_id, min_duration_s) >= min_duration_s]
+
+
 def ingest_one(creator: Creator, registry: list[Creator]) -> IngestedTranscript | None:
     """List a creator's recent videos, attribute them per the shared-channel
     rule (a no-op for creators with a personal channel), and fetch+save a
@@ -119,7 +150,30 @@ def ingest_one(creator: Creator, registry: list[Creator]) -> IngestedTranscript 
         )
         return None
 
-    for video in attributed:
+    try:
+        durations = get_video_durations([v.video_id for v in attributed])
+    except YouTubeApiError as e:
+        # A quota blip or transient API failure must not zero out a
+        # deadline-morning ingest run. Same fallback the filter itself
+        # already applies to any individual video it has no duration
+        # for (see `filter_min_duration`'s docstring) — "unknown" is
+        # kept, never treated as "too short".
+        print(
+            f"run_ingest: duration lookup failed ({e}) — skipping the min-duration "
+            f"Shorts filter for {creator.name}, proceeding unfiltered",
+            file=sys.stderr,
+        )
+        durations = {}
+    selectable = filter_min_duration(attributed, durations)
+    if not selectable:
+        print(
+            f"run_ingest: every video attributed to {creator.name} was under "
+            f"{MIN_DURATION_S}s (Shorts) — none selectable",
+            file=sys.stderr,
+        )
+        return None
+
+    for video in selectable:
         transcript = fetch_transcript(video.video_id)
         if transcript is None:
             print(
