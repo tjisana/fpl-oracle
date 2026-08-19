@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -104,6 +105,22 @@ def _get_client() -> anthropic.Anthropic:
 def render_timestamped_transcript(transcript: Transcript) -> str:
     """Render segments as '[123s] text' lines for the model."""
     return "\n".join(f"[{int(s.start)}s] {s.text}" for s in transcript.segments)
+
+
+_MARKER_RE = re.compile(r"\[\d+s\]")
+
+
+def strip_marker_artifacts(quote: str) -> str:
+    """Remove '[123s]' timestamp markers from a model-emitted quote.
+
+    The markers are an artifact of OUR transcript rendering, not
+    transcript content — the first live sweep showed the model embeds
+    them mid-quote when a quote spans segments, despite prompt
+    instructions, flipping every quote to UNVERIFIED. Stripping exactly
+    the pattern we injected (then collapsing whitespace) is mechanical:
+    the remaining text must still match the transcript verbatim for
+    verification to pass."""
+    return collapse_whitespace(_MARKER_RE.sub(" ", quote))
 
 
 def locate_quote_timestamp(quote: str, transcript: Transcript) -> int | None:
@@ -218,14 +235,15 @@ def extract_rank_claims(
 
     candidates = []
     for claim in wire.claims:
-        located = locate_quote_timestamp(claim.quote, transcript)
+        quote = strip_marker_artifacts(claim.quote)
+        located = locate_quote_timestamp(quote, transcript)
         candidates.append(
             RankClaimCandidate(
                 creator_id=creator_id,
                 video_id=video_id,
                 video_title=video_title,
                 timestamp_s=located if located is not None else claim.timestamp_hint_s,
-                quote=claim.quote,
+                quote=quote,
                 claimed_season=claim.claimed_season,
                 claimed_rank=claim.claimed_rank,
                 claim_kind=claim.claim_kind,
@@ -234,6 +252,36 @@ def extract_rank_claims(
             )
         )
     return candidates
+
+
+DEFAULT_CANDIDATES_PATH = Path("data/harvest/claims_candidates.json")
+
+
+def save_candidates(
+    candidates: list[RankClaimCandidate], path: Path = DEFAULT_CANDIDATES_PATH
+) -> Path:
+    """Persist raw (pre-verification) candidates so verification and
+    rendering can be re-run offline — an LLM sweep is paid for once."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([json.loads(c.model_dump_json()) for c in candidates], indent=2))
+    return path
+
+
+def reverify_saved_candidates(
+    candidates_path: Path = DEFAULT_CANDIDATES_PATH,
+) -> Path:
+    """Re-run quote verification + review rendering from saved candidates
+    and cached transcripts — no LLM calls, no network for cached videos."""
+    raw = json.loads(candidates_path.read_text())
+    candidates = [RankClaimCandidate.model_validate(c) for c in raw]
+    transcripts: dict[str, Transcript] = {}
+    for video_id in {c.video_id for c in candidates}:
+        transcript = fetch_transcript(video_id)
+        if transcript is not None:
+            transcripts[video_id] = transcript
+    names = {c.creator_id: c.name for c in REGISTRY}
+    verified = verify_candidates(candidates, transcripts)
+    return write_claims_review(verified, creator_names=names)
 
 
 def run_claim_extraction(
@@ -300,6 +348,7 @@ def run_claim_extraction(
         )
         all_candidates.extend(candidates)
 
+    save_candidates(all_candidates)
     verified = verify_candidates(all_candidates, transcripts)
     path = write_claims_review(verified, creator_names=names)
     if failures:
@@ -319,10 +368,18 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Extract rank claims from harvested transcripts")
     parser.add_argument("creator_ids", nargs="*", help="limit to these creator ids")
+    parser.add_argument(
+        "--reverify",
+        action="store_true",
+        help="re-verify + re-render from saved candidates (no LLM calls)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    path = run_claim_extraction(creator_ids=args.creator_ids or None)
+    if args.reverify:
+        path = reverify_saved_candidates()
+    else:
+        path = run_claim_extraction(creator_ids=args.creator_ids or None)
     print(f"claims review written to {path} — every claim needs owner approval")
     return 0
 

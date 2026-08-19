@@ -275,3 +275,62 @@ class TestRunClaimExtraction:
         ce.run_claim_extraction(manifest_path=self._manifest(tmp_path, self._entries()))
         text = review_path.read_text()
         assert "transcript vanished" in text
+
+
+def test_strip_marker_artifacts():
+    from fpl_oracle.roster.claim_extract import strip_marker_artifacts
+
+    assert (
+        strip_marker_artifacts("You can see from [37s] my rank, 1.1 million.")
+        == "You can see from my rank, 1.1 million."
+    )
+    assert strip_marker_artifacts("no markers here") == "no markers here"
+    assert strip_marker_artifacts("[0s] leading and trailing [123s]") == "leading and trailing"
+
+
+def test_marker_polluted_quote_now_verifies_and_locates(monkeypatch):
+    # the exact failure from the first live sweep: quote spans segments and
+    # the model copied the next segment's [Ns] marker into it
+    polluted = "so this season i finished [7s] 588th in the world"
+    claim = _wire_claim(quote=polluted, timestamp_hint_s=999)
+    _fake_client(monkeypatch, [_response(_WireClaims(claims=[claim]))])
+    (candidate,) = extract_rank_claims(
+        creator_id="c",
+        creator_name="C",
+        video_id="vid123",
+        video_title="T",
+        transcript=_transcript(),
+    )
+    assert "[7s]" not in candidate.quote
+    assert candidate.timestamp_s == 4  # derived, not the 999 hint
+    (verified,) = verify_candidates([candidate], {"vid123": _transcript()})
+    assert verified.quote_verified is True
+
+
+def test_save_and_reverify_round_trip(monkeypatch, tmp_path):
+    from fpl_oracle.roster import claim_extract as ce
+    from fpl_oracle.roster.claims import RankClaimCandidate
+
+    candidate = RankClaimCandidate(
+        creator_id="lets-talk-fpl",
+        video_id="vid123",
+        video_title="SEASON REVIEW",
+        timestamp_s=4,
+        quote="this season i finished 588th in the world",
+        claimed_season="2025/26",
+        claimed_rank=588,
+        claim_kind="overall_rank",
+    )
+    saved = ce.save_candidates([candidate], path=tmp_path / "cands.json")
+
+    monkeypatch.setattr(ce, "fetch_transcript", lambda vid: _transcript())
+    review_path = tmp_path / "review.md"
+    written = {}
+    monkeypatch.setattr(
+        ce,
+        "write_claims_review",
+        lambda cands, creator_names=None: (written.update(c=cands), review_path)[1],
+    )
+    assert ce.reverify_saved_candidates(candidates_path=saved) == review_path
+    (verified,) = written["c"]
+    assert verified.quote_verified is True
