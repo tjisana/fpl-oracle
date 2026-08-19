@@ -4,25 +4,46 @@ player record — or refuses to, when it isn't confident. See the
 `fpl-domain` skill ("Player name matching") for why this is the #1
 data-quality risk in the pipeline.
 
-Resolver epistemics (decided in Phase 2 clarification round 1, after
-measuring that plain rapidfuzz `token_set_ratio` alone does not clear 85
-for the skill's own canonical manglings — "Sacca"/Saka, "Hall and"/
-Haaland, "Van Dyke"/van Dijk):
+Resolver epistemics (clarification round 1 set the two-tier design;
+a fresh-context review against the real 592-player roster then found
+Tier 1 itself was silently over-trusting — round 2 hardens it):
 
 - Tier 1 — a fuzzy name score (rapidfuzz `token_set_ratio`, max of
-  web_name vs full name) >= 85 is trusted ALONE, but only once it's clear
-  of any tied candidates: either it's the sole top scorer, or the
-  composite key (inferred team + inferred position) splits the tie. A
-  bare tie at 85+ that the composite key can't split stays AMBIGUOUS
-  (e.g. bare "Gabriel" with no team/position — three Arsenal players
-  share that first name).
+  web_name vs full name) >= 85 is trusted, but ONLY when:
+    (a) it isn't tied with other candidates the composite key can't
+        split (e.g. bare "Gabriel" with no team/position — three
+        Arsenal players share that first name — stays AMBIGUOUS), AND
+    (b) the winning candidate doesn't explicitly CONTRADICT a supplied
+        team/position hint (team_agree is False, or position disagrees)
+        — a contradicted winner is never accepted, not even alone, AND
+    (c) the winning score didn't come from a token-SUBSET match unless
+        corroborated. `token_set_ratio` returns 100 whenever one name's
+        tokens are a subset of the other's — "Hall and" vs a player
+        web-named "Hall" scores 100 this way, as does bare "Mohamed"
+        against anyone's "Mohamed <surname>" full name. A subset match
+        (raw's tokens != the matched string's tokens) is trusted only
+        with a phonetic agreement or a near-exact token_sort_ratio,
+        never on the raw score alone. Note this also structurally
+        satisfies "no tie-split composite-key accept below 85 without
+        phonetics" — token_set_ratio >= token_sort_ratio always holds,
+        so a fuzzy score under 90 can never clear the token_sort
+        alternative, leaving phonetic agreement as the only way in.
+  A candidate that fails (b) or (c) doesn't fall back to some other
+  Tier-1 candidate — it falls through to Tier 2 for that whole call.
 - Tier 2 — below 85, no single signal is trusted alone. A match is only
   accepted with TWO independent corroborations at once: a phonetic match
   (jellyfish metaphone, comparing the normalized raw name AND its last
   token against the candidate's web_name AND second_name, with a small
   edit-distance tolerance since name transliteration varies) AND the
-  composite key agreeing on BOTH team and position. Below a 55 fuzzy
+  composite key agreeing on BOTH team and position. Below a 40 fuzzy
   floor, or missing either corroboration, nothing is auto-accepted.
+- AMBIGUOUS is reserved for genuine tie evidence only: an unsplittable
+  Tier-1 tie, or more than one corroborated Tier-2 candidate. There is
+  no "uncorroborated plausible cluster" AMBIGUOUS path — at 592 players,
+  garbage names routinely land two unrelated candidates within a few
+  points of each other, so a score-only cluster check just relabels
+  garbage as AMBIGUOUS instead of UNMATCHED without adding information
+  (UNMATCHED already carries the top-5 candidates for review).
 - Never fabricate: an unresolved/undecided name always returns
   `player=None`, with the leading candidates attached for human review.
 """
@@ -39,8 +60,8 @@ from rapidfuzz import fuzz, utils
 
 from fpl_oracle.fpl.client import get_bootstrap_static
 
-# Tier 1: a fuzzy score at or above this is trusted alone (subject to the
-# tie-splitting rule above).
+# Tier 1: a fuzzy score at or above this is trusted, subject to the
+# contradiction-veto / subset-hardening rules in the module docstring.
 _TIER1_ACCEPT_SCORE = 85.0
 # Candidates within this many points of the top fuzzy score are treated as
 # "tied" for tie-splitting / ambiguity purposes, in both tiers.
@@ -49,27 +70,25 @@ _TIE_MARGIN = 5.0
 # never plausible enough to accept even with full corroboration (phonetic
 # + team + position, all three). Measured against the skill's own
 # canonical manglings: token_set_ratio gives "Sacca"/Saka=66.7, "Van
-# Dyke"/van Dijk=75.0, but "Hall and"/Haaland=45.5 — clarification round 1
-# specified 55 here without re-checking that number, which would leave
-# "Hall and" permanently unmatchable even with full corroboration. Lowered
-# to 40; safe to set lower than the uncorroborated floor below because two
-# independent signals (phonetic + composite key) are still required on top
-# of it — this floor alone never accepts anything.
+# Dyke"/van Dijk=54.5-75.0 depending on roster, "Hall and"/Haaland=45.5.
+# Empirically validated against the real bootstrap roster (see PR review):
+# a 55 floor would leave both "Hall and" and "Van Dyke" permanently
+# unmatchable even with full corroboration. 40 stays safe because two
+# independent signals (phonetic + composite key) are still required on
+# top of it — this floor alone never accepts anything.
 _TIER2_FLOOR_SCORE = 40.0
-# Uncorroborated "plausible cluster" floor: used only when NEITHER tier
-# accepted a match, to decide whether the leading candidates are worth
-# flagging AMBIGUOUS for human review rather than flatly UNMATCHED. Kept
-# at the original 55 (not lowered with the corroborated floor above) —
-# with no phonetic/composite-key backing at all, a low bar here would flag
-# pure noise as "ambiguous" (e.g. "Ronaldinho" happens to land two
-# unrelated candidates ~40-42 apart from each other; that's noise, not a
-# real cluster worth a human look).
-_AMBIGUOUS_CLUSTER_FLOOR = 55.0
+# Token-sort-ratio floor: the alternative to phonetic agreement for
+# trusting a Tier-1 subset match (see docstring point (c)). Near-exact
+# only — genuine full-name typos ("Erling Halaand") score ~93-96 here;
+# subset-100 pathologies ("Hall and" vs "Hall", bare "Mohamed" vs
+# "Mohamed Salah") score ~53-70, well below this.
+_TOKEN_SORT_TRUST_SCORE = 90.0
 # Team-name fuzzy match (against short_name and full name): at/above this,
 # the inferred team is treated as confirming the candidate.
 _TEAM_CONFIRM_SCORE = 65.0
 # Team-name fuzzy match: below this, the inferred team is treated as
-# contradicting the candidate (a demotion signal, never used alone).
+# contradicting the candidate — this is a real signal now (Tier-1
+# contradiction veto), not just a demotion.
 _TEAM_CONTRADICT_SCORE = 35.0
 # How many leading candidates to surface for human review.
 _REVIEW_CANDIDATE_COUNT = 5
@@ -164,13 +183,24 @@ def _normalize(text: str) -> str:
     return re.sub(r"[^a-z]", "", text.lower())
 
 
-def _fuzzy_score(name_raw: str, player: Player) -> float:
+def _token_set(text: str) -> frozenset[str]:
+    """Lowercase, letters-only tokens as a set — used to tell a genuine
+    exact match from a `token_set_ratio` subset-100 pathology (see module
+    docstring point (c))."""
+    return frozenset(_normalize(tok) for tok in text.split())
+
+
+def _fuzzy_score_detail(name_raw: str, player: Player) -> tuple[float, str]:
     """Max of rapidfuzz `token_set_ratio` against web_name and against
-    the candidate's full name, per the fpl-domain skill's matching rule."""
-    return max(
-        fuzz.token_set_ratio(name_raw, player.web_name, processor=utils.default_process),
-        fuzz.token_set_ratio(name_raw, player.full_name, processor=utils.default_process),
-    )
+    the candidate's full name, per the fpl-domain skill's matching rule.
+    Also returns *which* of those two strings produced the winning score,
+    since Tier-1 subset-hardening needs to know what it's comparing
+    against."""
+    web_score = fuzz.token_set_ratio(name_raw, player.web_name, processor=utils.default_process)
+    full_score = fuzz.token_set_ratio(name_raw, player.full_name, processor=utils.default_process)
+    if web_score >= full_score:
+        return web_score, player.web_name
+    return full_score, player.full_name
 
 
 def _metaphone_agree(code_a: str, code_b: str) -> bool:
@@ -186,18 +216,17 @@ def _metaphone_agree(code_a: str, code_b: str) -> bool:
     return jellyfish.levenshtein_distance(code_a, code_b) <= 1
 
 
-def _phonetic_agree(name_raw: str, player: Player) -> bool:
+def _phonetic_agree(name_raw: str, mp_web: str, mp_second: str) -> bool:
     """Compare the normalized, concatenated raw name AND its last token
-    against the candidate's web_name and second_name (also normalized).
-    Any of the four pairings agreeing counts as a phonetic match."""
+    against the candidate's (precomputed) web_name and second_name
+    metaphone codes. Any of the four pairings agreeing counts as a
+    phonetic match."""
     tokens = name_raw.split()
     norm_concat = _normalize(name_raw)
     norm_last = _normalize(tokens[-1]) if tokens else norm_concat
 
     mp_concat = jellyfish.metaphone(norm_concat)
     mp_last = jellyfish.metaphone(norm_last)
-    mp_web = jellyfish.metaphone(_normalize(player.web_name))
-    mp_second = jellyfish.metaphone(_normalize(player.second_name))
 
     return any(
         _metaphone_agree(raw_code, player_code)
@@ -206,13 +235,72 @@ def _phonetic_agree(name_raw: str, player: Player) -> bool:
     )
 
 
+# Common extractor-style club names/spellings that don't fuzzy-match well
+# against the current bootstrap-static `short_name`/`name` fields — e.g. a
+# transcript says "Tottenham" but the payload only carries short_name=TOT,
+# name="Spurs" (measured: "Tottenham"->Spurs scores 50.0, "Manchester
+# United"->"Man Utd" scores 58.3, both below the confirm bar). Keys are
+# `_normalize`d (lowercase, letters-only) common phrasings; values are the
+# canonical `short_name` from the current live bootstrap-static payload
+# (sanity-checked against it directly — see PlayerDB.load() usage). Covers
+# all 20 current-season clubs; most already fuzzy-match fine without an
+# alias (e.g. "Arsenal"/"Liverpool"/"Chelsea" match their `name` field
+# directly) but every club gets at least one entry for robustness.
+_TEAM_ALIASES: dict[str, str] = {
+    "arsenal": "ARS",
+    "astonvilla": "AVL",
+    "villa": "AVL",
+    "bournemouth": "BOU",
+    "afcbournemouth": "BOU",
+    "brentford": "BRE",
+    "brighton": "BHA",
+    "brightonhovealbion": "BHA",
+    "brightonandhovealbion": "BHA",
+    "chelsea": "CHE",
+    "coventry": "COV",
+    "coventrycity": "COV",
+    "crystalpalace": "CRY",
+    "palace": "CRY",
+    "everton": "EVE",
+    "fulham": "FUL",
+    "hull": "HUL",
+    "hullcity": "HUL",
+    "ipswich": "IPS",
+    "ipswichtown": "IPS",
+    "leeds": "LEE",
+    "leedsunited": "LEE",
+    "liverpool": "LIV",
+    "mancity": "MCI",
+    "manchestercity": "MCI",
+    "manutd": "MUN",
+    "manu": "MUN",
+    "manunited": "MUN",
+    "manchesterunited": "MUN",
+    "manchesterutd": "MUN",
+    "newcastle": "NEW",
+    "newcastleunited": "NEW",
+    "nottinghamforest": "NFO",
+    "nottsforest": "NFO",
+    "nottmforest": "NFO",
+    "forest": "NFO",
+    "tottenham": "TOT",
+    "tottenhamhotspur": "TOT",
+    "spurs": "TOT",
+    "sunderland": "SUN",
+}
+
+
 def _team_agreement(team_inferred: str | None, team_short: str, team_full: str) -> bool | None:
-    """True if `team_inferred` fuzzily confirms this candidate's team,
-    False if it contradicts it, None if there's no team hint or the text
-    is too ambiguous to call either way. Never used as sole evidence —
-    only ever combined with a name/phonetic signal."""
+    """True if `team_inferred` confirms this candidate's team, False if it
+    contradicts it, None if there's no team hint or the text is too
+    ambiguous to call either way. An alias-table hit is decisive either
+    way (it identifies a specific intended club); otherwise falls back to
+    fuzzy matching against both short_name and the full name."""
     if team_inferred is None:
         return None
+    alias_short = _TEAM_ALIASES.get(_normalize(team_inferred))
+    if alias_short is not None:
+        return alias_short == team_short
     score = max(
         fuzz.token_set_ratio(team_inferred, team_short, processor=utils.default_process),
         fuzz.token_set_ratio(team_inferred, team_full, processor=utils.default_process),
@@ -228,9 +316,32 @@ def _team_agreement(team_inferred: str | None, team_short: str, team_full: str) 
 class _Candidate:
     player: Player
     fuzzy: float
+    matched_target: str
     phonetic: bool
     team_agree: bool | None
     position_agree: bool | None
+
+
+def _tier1_trustworthy(name_raw: str, candidate: _Candidate) -> bool:
+    """Gate for accepting a Tier-1 (>=85) candidate outright. Combines the
+    contradiction veto and subset-100 hardening from the module docstring:
+    an explicit team/position contradiction is disqualifying regardless of
+    score, and a score that came from a token-subset match (raw's tokens
+    aren't literally equal to whichever string produced the score) needs a
+    phonetic or near-exact token_sort_ratio backstop — otherwise "Hall
+    and" matching a player web-named "Hall", or bare "Mohamed" matching
+    anyone's "Mohamed <surname>" full name, would sail through on a bare
+    100 that has nothing to do with the actual candidate."""
+    if candidate.team_agree is False or candidate.position_agree is False:
+        return False
+    if _token_set(name_raw) == _token_set(candidate.matched_target):
+        return True
+    if candidate.phonetic:
+        return True
+    return (
+        fuzz.token_sort_ratio(name_raw, candidate.matched_target, processor=utils.default_process)
+        >= _TOKEN_SORT_TRUST_SCORE
+    )
 
 
 class PlayerDB:
@@ -238,9 +349,18 @@ class PlayerDB:
     resolver. Construct via `from_bootstrap` (offline, testable) or
     `load` (fetches live via `fpl.client.get_bootstrap_static`)."""
 
-    def __init__(self, players: dict[int, Player], team_full_names: dict[int, str]) -> None:
+    def __init__(
+        self,
+        players: dict[int, Player],
+        team_full_names: dict[int, str],
+        player_metaphones: dict[int, tuple[str, str]],
+    ) -> None:
         self._players = players
         self._team_full_names = team_full_names
+        # (metaphone(web_name), metaphone(second_name)) per player, computed
+        # once here rather than on every resolve() call — the DB is built
+        # once and resolved against many times per extraction run.
+        self._player_metaphones = player_metaphones
 
     @classmethod
     def from_bootstrap(cls, data: dict) -> PlayerDB:
@@ -248,6 +368,7 @@ class PlayerDB:
         team_full_names = {t["id"]: t["name"] for t in data["teams"]}
 
         players: dict[int, Player] = {}
+        player_metaphones: dict[int, tuple[str, str]] = {}
         for e in data["elements"]:
             team_id = e["team"]
             player = Player(
@@ -263,8 +384,14 @@ class PlayerDB:
                 chance_of_playing_next_round=e.get("chance_of_playing_next_round"),
             )
             players[player.player_id] = player
+            player_metaphones[player.player_id] = (
+                jellyfish.metaphone(_normalize(player.web_name)),
+                jellyfish.metaphone(_normalize(player.second_name)),
+            )
 
-        return cls(players=players, team_full_names=team_full_names)
+        return cls(
+            players=players, team_full_names=team_full_names, player_metaphones=player_metaphones
+        )
 
     @classmethod
     def load(cls) -> PlayerDB:
@@ -289,13 +416,16 @@ class PlayerDB:
 
         scored: list[_Candidate] = []
         for player in self._players.values():
-            fuzzy = _fuzzy_score(name_raw, player)
+            fuzzy, matched_target = _fuzzy_score_detail(name_raw, player)
             team_agree = _team_agreement(
                 team_inferred, player.team_short, self._team_full_names[player.team_id]
             )
             position_agree = None if parsed_position is None else player.position == parsed_position
-            phonetic = _phonetic_agree(name_raw, player)
-            scored.append(_Candidate(player, fuzzy, phonetic, team_agree, position_agree))
+            mp_web, mp_second = self._player_metaphones[player.player_id]
+            phonetic = _phonetic_agree(name_raw, mp_web, mp_second)
+            scored.append(
+                _Candidate(player, fuzzy, matched_target, phonetic, team_agree, position_agree)
+            )
 
         if not scored:
             return MatchResult(
@@ -310,40 +440,50 @@ class PlayerDB:
         review_candidates = [c.player for c in scored[:_REVIEW_CANDIDATE_COUNT]]
         best = scored[0]
 
-        # Tier 1: a strong fuzzy score, trusted alone unless tied with
-        # other candidates that the composite key can't split.
+        # Tier 1: a strong fuzzy score. Trusted only once contradiction
+        # veto + subset hardening clear it (see _tier1_trustworthy and the
+        # module docstring) — a winner that fails either doesn't fall back
+        # to some other Tier-1 candidate, it falls through to Tier 2 below.
         if best.fuzzy >= _TIER1_ACCEPT_SCORE:
             tied = [c for c in scored if best.fuzzy - c.fuzzy < _TIE_MARGIN]
             if len(tied) == 1:
-                return MatchResult(
-                    player=best.player,
-                    score=best.fuzzy,
-                    status=MatchStatus.MATCHED,
-                    candidates=review_candidates,
-                    name_raw=name_raw,
-                )
-            composite_winners = [c for c in tied if c.team_agree and c.position_agree]
-            if len(composite_winners) == 1:
-                winner = composite_winners[0]
-                return MatchResult(
-                    player=winner.player,
-                    score=winner.fuzzy,
-                    status=MatchStatus.MATCHED,
-                    candidates=review_candidates,
-                    name_raw=name_raw,
-                )
-            return MatchResult(
-                player=None,
-                score=best.fuzzy,
-                status=MatchStatus.AMBIGUOUS,
-                candidates=[c.player for c in tied],
-                name_raw=name_raw,
-            )
+                sole = tied[0]
+                if _tier1_trustworthy(name_raw, sole):
+                    return MatchResult(
+                        player=sole.player,
+                        score=sole.fuzzy,
+                        status=MatchStatus.MATCHED,
+                        candidates=review_candidates,
+                        name_raw=name_raw,
+                    )
+                # Untrustworthy sole "winner" — fall through to Tier 2.
+            else:
+                composite_winners = [c for c in tied if c.team_agree and c.position_agree]
+                if len(composite_winners) == 1:
+                    winner = composite_winners[0]
+                    if _tier1_trustworthy(name_raw, winner):
+                        return MatchResult(
+                            player=winner.player,
+                            score=winner.fuzzy,
+                            status=MatchStatus.MATCHED,
+                            candidates=review_candidates,
+                            name_raw=name_raw,
+                        )
+                    # Untrustworthy composite winner — fall through to Tier 2.
+                else:
+                    return MatchResult(
+                        player=None,
+                        score=best.fuzzy,
+                        status=MatchStatus.AMBIGUOUS,
+                        candidates=[c.player for c in tied],
+                        name_raw=name_raw,
+                    )
 
-        # Tier 2: phonetic fallback. Below the trusted fuzzy threshold, a
-        # match needs BOTH a phonetic agreement AND full composite-key
-        # (team + position) agreement — independent corroboration, never
-        # a bare score.
+        # Tier 2: phonetic fallback. Below the trusted fuzzy threshold (or
+        # falling through from a vetoed Tier-1 "winner"), a match needs
+        # BOTH a phonetic agreement AND full composite-key (team +
+        # position) agreement — independent corroboration, never a bare
+        # score.
         tier2 = [
             c
             for c in scored
@@ -367,19 +507,11 @@ class PlayerDB:
                 name_raw=name_raw,
             )
 
-        # Nothing cleared either tier. A plausible-but-unconfirmed cluster
-        # (several candidates close together, none corroborated) is worth
-        # a human look; a lone weak candidate is just unmatched. Uses the
-        # stricter uncorroborated floor, not the Tier 2 corroboration floor.
-        plausible = [c for c in scored if c.fuzzy >= _AMBIGUOUS_CLUSTER_FLOOR]
-        if len(plausible) >= 2 and (plausible[0].fuzzy - plausible[1].fuzzy) < _TIE_MARGIN:
-            return MatchResult(
-                player=None,
-                score=best.fuzzy,
-                status=MatchStatus.AMBIGUOUS,
-                candidates=[c.player for c in plausible[:_REVIEW_CANDIDATE_COUNT]],
-                name_raw=name_raw,
-            )
+        # Nothing cleared either tier. No score-only "plausible cluster"
+        # fallback — at hundreds of players, unrelated garbage routinely
+        # lands two candidates within a few points of each other, so a
+        # bare-score cluster check just mislabels noise as AMBIGUOUS.
+        # UNMATCHED already carries the top candidates for human review.
         return MatchResult(
             player=None,
             score=best.fuzzy,
