@@ -12,8 +12,13 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       title-filtered ingestion later). See `roster/resolve_channels.py`.
 - [x] Resolve each creator's real FPL team ID — corrected methodology (real name first, THEN
       match against `entry/{id}/history/`, not channel/brand name) and re-checked every
-      previously-rejected candidate. **Still 0/20 API-verified** — every candidate, old and
-      new, failed live verification (a few because a years-old article's ID has since been
+      previously-rejected candidate. **RESOLVED 2026-08-19: 19/20 API-verified** — found via the
+      leagues-classic `admin_entry` technique (a creator's own branded league names its
+      creator as admin); every ID confirmed live, and the histories independently
+      reproduce the third-party claim ledger. Weights now come from `compute_weight()`
+      on real multi-season history. Only FPL Dylan has no discoverable entry.
+      HISTORICALLY (when this line was written) 0/20 were verified — every candidate,
+      old and new, failed live verification (a few because a years-old article's ID has since been
       reassigned to an unrelated manager — a standing risk, not a one-off; see
       `roster/registry.py` module docstring). Added a `Verification.DOCUMENTED` tier for
       creators BBC/FFS have publicly attributed specific finishes to under their real name —
@@ -22,7 +27,7 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       shrunk harder (0.75 vs DOCUMENTED's 0.85) for self-report selection bias; Andy (Let's
       Talk FPL) was reclassified from DOCUMENTED to SELF_CLAIMED for his own season-review
       video's claim — the honest tier for that evidence. So 5 DOCUMENTED + 1 SELF_CLAIMED =
-      6/20 sit at `Tier.CORE`; the other 14 are `Tier.SECONDARY` at the default weight. Full
+      6/20 sat at `Tier.CORE` (now 19/20, post-API-verification). Full
       per-creator sourcing in `roster/registry.py` notes.
 - [x] `roster/weights.py`: `compute_weight()` (API tier) + `compute_documented_weight()` +
       `compute_self_claimed_weight()` (claim-based tiers, sharing a `_claimed_weight()`

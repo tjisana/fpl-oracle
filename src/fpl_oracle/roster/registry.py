@@ -60,14 +60,19 @@ FPL Dylan is the one creator with no discoverable entry — not in any
 creator league reached by the crawl, no entry link in his descriptions.
 He remains UNVERIFIED at the default weight.
 
-A mechanism worth keeping in mind: FPL entry IDs are assigned PER-SEASON
-— every manager registers fresh each season and IDs are handed out
-sequentially, so they are NOT a persistent per-person identifier. An old
-article's ID pointing at a stranger is structural, not bad luck. This was
-re-confirmed here: FPLtips was 4464 in 2025/26 and is 1527 in 2026/27,
-and 4464 now belongs to someone else. The IDs below are current-season
-and need re-verifying each August — but the `past` array they return is
-the manager's full career, so today's data is complete.
+CORRECTING AN EARLIER THEORY IN THIS FILE: a previous pass concluded FPL
+entry IDs are assigned per-season and are "not a persistent per-person
+identifier". The data gathered here refutes that — every ID below returns
+one manager's whole career under a single ID (252 goes back to 2006/07,
+20 seasons; 41 covers 16). IDs are persistent per account. The old
+observation that stale article IDs resolve to strangers is better
+explained by those sources simply being WRONG (one such table was found
+to be fabricated outright, and the FFS attribution of entry 1320 to FPL
+Harry is demonstrably a different person) than by ID recycling.
+
+Consequence: these IDs do NOT need re-verifying every August. Re-pull the
+histories to pick up a new season, and re-check an ID only if its
+`entry/{id}/` name stops matching the creator.
 
 Institutional brands (Fantasy Football Scout, Fantasy Football Hub) were
 dropped entirely per the owner's instruction — no person, no track
@@ -102,11 +107,13 @@ def _past(spec: str) -> list[PastFinish]:
     The histories below were pulled LIVE from `entry/{id}/history/` on
     2026-08-19 (see each creator's `fpl_team_id`) — they are API facts, not
     claims. Kept in this compact form so ~300 season rows stay readable.
-    NOTE: FPL entry IDs are per-season, so these IDs need re-verifying each
-    August; the `past` array they return is the manager's full career.
+    A rank of "-" means the API returned no rank for that season (it can
+    return null/0 — e.g. a season the manager did not play). Recorded
+    rather than dropped, so a re-pull round-trips exactly; `compute_weight`
+    skips them instead of scoring them as a worst-possible finish.
     """
     return [
-        PastFinish(season_name=season, rank=int(rank))
+        PastFinish(season_name=season, rank=None if rank == "-" else int(rank))
         for season, rank in (tok.split(":") for tok in spec.split())
     ]
 
@@ -139,7 +146,7 @@ _API_HISTORY: dict[str, list[PastFinish]] = {
     "fpl-focal": _past(
         "2011/12:529142 2012/13:270849 2013/14:22327 2014/15:43767 2015/16:89065 "
         "2016/17:155308 2017/18:41632 2018/19:104353 2019/20:80619 2020/21:53719 "
-        "2021/22:17391 2023/24:49772 2024/25:3405 2025/26:25669"
+        "2021/22:17391 2022/23:- 2023/24:49772 2024/25:3405 2025/26:25669"
     ),
     "holly-shand": _past(
         "2014/15:170951 2015/16:5707 2016/17:88806 2017/18:282648 2018/19:6720 "
@@ -373,6 +380,7 @@ REGISTRY: list[Creator] = [
         real_name="Andy Mears",
         fpl_team_id=41,
         verification=Verification.API,
+        self_claimed_finishes=_ANDY_SELF_CLAIMS,
         past_finishes=_API_HISTORY["lets-talk-fpl"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["lets-talk-fpl"]),
         notes=(
@@ -394,9 +402,10 @@ REGISTRY: list[Creator] = [
         channel_id="UCcPWnCj5AKC19HaySZjb25g",
         channel_title="FPL Harry",
         subscriber_count=233_000,
-        real_name=None,
+        real_name="Harry Daniels",
         fpl_team_id=3054,
         verification=Verification.API,
+        self_claimed_finishes=_HARRY_SELF_CLAIMS,
         past_finishes=_API_HISTORY["fpl-harry"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-harry"]),
         notes=(
@@ -429,6 +438,7 @@ REGISTRY: list[Creator] = [
         real_name="Ross Dowsett",
         fpl_team_id=199,
         verification=Verification.API,
+        self_claimed_finishes=_RAPTOR_SELF_CLAIMS,
         past_finishes=_API_HISTORY["fpl-raptor"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-raptor"]),
         notes=(
@@ -451,6 +461,7 @@ REGISTRY: list[Creator] = [
         real_name="Prasun Singhal",
         fpl_team_id=3315,
         verification=Verification.API,
+        documented_finishes=_PRAS_CLAIMS,
         past_finishes=_API_HISTORY["pras"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["pras"]),
         channel_primary=True,
@@ -499,6 +510,7 @@ REGISTRY: list[Creator] = [
         real_name="Oscar (surname not publicly disclosed)",
         fpl_team_id=298,
         verification=Verification.API,
+        documented_finishes=_FOCAL_CLAIMS,
         past_finishes=_API_HISTORY["fpl-focal"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-focal"]),
         notes=(
@@ -519,6 +531,7 @@ REGISTRY: list[Creator] = [
         real_name="Holly Shand",
         fpl_team_id=70063,
         verification=Verification.API,
+        documented_finishes=_HOLLY_CLAIMS,
         past_finishes=_API_HISTORY["holly-shand"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["holly-shand"]),
         notes=(
@@ -628,6 +641,7 @@ REGISTRY: list[Creator] = [
         real_name="Gianni Buttice",
         fpl_team_id=2375,
         verification=Verification.API,
+        documented_finishes=_GIANNI_CLAIMS,
         past_finishes=_API_HISTORY["gianni-buttice"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["gianni-buttice"]),
         notes=(
@@ -652,6 +666,7 @@ REGISTRY: list[Creator] = [
         real_name="Wes Prickett",
         fpl_team_id=16070,
         verification=Verification.API,
+        documented_finishes=_HEISENBERG_CLAIMS,
         past_finishes=_API_HISTORY["fpl-heisenberg"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-heisenberg"]),
         notes=(
@@ -670,13 +685,13 @@ REGISTRY: list[Creator] = [
         channel_id="UCDG_EqOaaO1SSxEMZwfrSkg",
         channel_title="FPL Family",
         subscriber_count=28_800,
-        real_name="Sam Bonfield",
+        real_name="Lee Bonfield",
         fpl_team_id=2913,
         verification=Verification.API,
         past_finishes=_API_HISTORY["fpl-family"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-family"]),
         notes=(
-            "Not deep-verified this pass — tier 2 by design (sentiment/diversity pick), so "
+            "DUO — the weight is LEE Bonfield's verified history (entry 2913), not the channel's combined output. Sam's own entry (2977) was checked and is weaker (0.198 vs Lee's 0.264); the better of the two was taken, per the owner. Picks spoken by Sam therefore carry Lee's weight — a known approximation. Not deep-verified this pass — tier 2 by design (sentiment/diversity pick), so "
             "default weight applies regardless of verification status. real_name is one half "
             "of the Lee & Sam duo: FFS's own Pro Pundits page independently names 'Sam "
             "Bonfield' as 'One half of FPL Family team', consistent with earlier research "
@@ -692,7 +707,7 @@ REGISTRY: list[Creator] = [
         channel_title="Fantasy Football Hub (shared — see notes)",
         subscriber_count=109_000,
         channel_match_flagged=True,
-        real_name=None,
+        real_name="Abdul Rehman",
         fpl_team_id=70,
         verification=Verification.API,
         past_finishes=_API_HISTORY["fpl-salah"],
@@ -716,7 +731,7 @@ REGISTRY: list[Creator] = [
         verification=Verification.API,
         past_finishes=_API_HISTORY["fpl-hints"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-hints"]),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
     Creator(
         creator_id="fpl-matthew",
@@ -770,7 +785,7 @@ REGISTRY: list[Creator] = [
         subscriber_count=39_600,
         verification=Verification.UNVERIFIED,
         weight=weight_for(Verification.UNVERIFIED),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
     Creator(
         creator_id="planet-fpl",
@@ -780,11 +795,12 @@ REGISTRY: list[Creator] = [
         channel_id="UC8043oOKTB4uP8Nq15Kz6bg",
         channel_title="Planet FPL",
         subscriber_count=23_300,
+        real_name="James Linden",
         fpl_team_id=1194,
         verification=Verification.API,
         past_finishes=_API_HISTORY["planet-fpl"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["planet-fpl"]),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
     Creator(
         creator_id="fpltips",
@@ -798,6 +814,6 @@ REGISTRY: list[Creator] = [
         verification=Verification.API,
         past_finishes=_API_HISTORY["fpltips"],
         weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpltips"]),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
 ]

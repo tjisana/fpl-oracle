@@ -59,11 +59,19 @@ def _rank_score(rank: int | None) -> float:
 def compute_weight(past_finishes: list[PastFinish]) -> float:
     """Recency-weighted, log-rank-based weight from verified season
     history. Returns DEFAULT_TIER2_WEIGHT if there's no history to work
-    from (e.g. an unverified creator)."""
-    if not past_finishes:
+    from (e.g. an unverified creator).
+
+    Seasons with no rank (the API returns null/0 for a season a manager
+    did not play) are SKIPPED, not scored: scoring them would run them
+    through `_rank_score` as 0.0 — a worst-possible finish — and tank the
+    weight of a creator who simply sat a season out. They are still
+    recorded in `past_finishes` so the history round-trips faithfully; the
+    recency window is taken over the seasons that actually have a rank."""
+    ranked = [f for f in past_finishes if f.rank]
+    if not ranked:
         return DEFAULT_TIER2_WEIGHT
 
-    recent = sorted(past_finishes, key=_season_sort_key, reverse=True)[: len(_RECENCY_WEIGHTS)]
+    recent = sorted(ranked, key=_season_sort_key, reverse=True)[: len(_RECENCY_WEIGHTS)]
     total_weight = 0.0
     weighted_score = 0.0
     for finish, recency in zip(recent, _RECENCY_WEIGHTS, strict=False):

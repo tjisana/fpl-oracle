@@ -10,9 +10,19 @@ from pydantic import BaseModel
 class Tier(IntEnum):
     """Creator weighting tier. Tier 2 is the default fallback for creators
     whose skill can't be substantiated by any verification tier — they
-    get a low default weight instead of a history-derived one. A creator
-    can only be Tier.CORE if a real person's track record backs it —
-    institutional/multi-person brands don't qualify."""
+    get a low default weight instead of a history-derived one.
+
+    Tier.CORE requires a real PERSON's track record. Institutional brands
+    with no identifiable manager behind them don't qualify (that is why
+    Fantasy Football Scout / Hub were dropped from the roster entirely).
+
+    Multi-person brands (a duo or podcast) DO qualify, but only on a named
+    host's own verified history, and the record must say whose — see FPL
+    Family (Lee Bonfield's entry, not Sam's) and Planet FPL (James
+    Linden's, not Suj's). Their weight is that host's, applied to output
+    the other host shares in: a known approximation, recorded rather than
+    hidden. Same caveat as any shared channel — see the BlackBox/Az note
+    in `registry.py`."""
 
     CORE = 1
     SECONDARY = 2
