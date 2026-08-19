@@ -35,6 +35,12 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# agent worktrees checked out under .claude/ are other sessions' in-progress
+# trees — never lint, format, or type-check them from this checkout
+extend-exclude = [".claude/worktrees"]
+
+[tool.ty.src]
+exclude = [".claude/worktrees"]
 
 [build-system]
 requires = ["hatchling"]

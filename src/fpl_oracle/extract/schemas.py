@@ -1,9 +1,11 @@
 """Pydantic schemas for LLM pick extraction from creator transcripts.
 
-These models are the extraction contract: their JSON schema (including
-`Field` descriptions) is handed to Claude as the structured-output shape,
-so the descriptions below are written for the extracting model, not just
-for human readers.
+These models are the extraction contract. The structured-output shape
+handed to Claude is the pick-level content only (`picks` + `gameweek`) —
+the pipeline fills in `creator_id`/`video_id`/`video_title`/`published_at`
+itself, so the LLM never parrots back identifiers it could mangle. The
+`Field` descriptions on LLM-emitted fields are written for the extracting
+model, not just for human readers.
 
 Design decisions carried in here:
 
@@ -19,7 +21,11 @@ Design decisions carried in here:
   Wire ingested via Pras) make this distinction load-bearing, so the
   field is required — the extractor must commit to one.
 - `time_horizon` captures multi-week strategy talk ("for the run of
-  fixtures", "wildcard GW8") so future gameweeks can be steered by it.
+  fixtures", "Palmer in by GW4") so future gameweeks can be steered by it.
+- DEFERRED: player-less strategy statements (pure chip-timing plans like
+  "wildcard GW8" with no player attached) have no home in this schema —
+  every Pick requires a player name. Chip-plan modeling is out of v1
+  extraction scope; such statements are knowingly dropped.
 """
 
 from __future__ import annotations
@@ -98,6 +104,7 @@ class Pick(BaseModel):
     )
     time_horizon: int = Field(
         ge=1,
+        le=38,
         description=(
             "Horizon in gameweeks: 1 = this-week move, larger for stated "
             "plans ('for the run of fixtures' ~4-6, 'wildcard GW8' = "
@@ -125,6 +132,8 @@ class VideoExtraction(BaseModel):
     video_title: str
     published_at: datetime
     gameweek: int | None = Field(
+        ge=1,
+        le=38,
         description=(
             "The gameweek the video is about, if stated or inferable from "
             "title/context; None otherwise."

@@ -68,7 +68,8 @@ Extract from transcripts into this shape (Pydantic, `extract/schemas.py`):
   the COMPOSITE KEY name+team+position is what gets matched, never the bare string),
   `player_id` (resolved, nullable until matched), `action`
   (`squad_include | transfer_in | transfer_out | captain | vice | bench | avoid | watchlist`),
-  `conviction` (1–5, judged from language: "nailed", "punt", "locked in" = high;
+  `conviction` (1–5, judged from language: "nailed", "locked in" = high;
+  "punt" with clear intent = mid, it's a speculative differential;
   "maybe", "monitoring" = low), `time_horizon` (int, gameweeks: 1 = this-week punt,
   6 = long-term hold; infer from language like "for the run of fixtures"),
   `reasoning` (≤1 sentence, creator's own logic).

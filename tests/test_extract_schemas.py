@@ -47,6 +47,7 @@ def test_composite_key_fields_allow_none_but_must_be_present():
         {"conviction": 0},
         {"conviction": 6},
         {"time_horizon": 0},
+        {"time_horizon": 39},
         {"action": "buy"},
         {"position_inferred": "STRIKER"},
         {"player_name_raw": ""},
@@ -79,3 +80,7 @@ def test_video_extraction_round_trip():
     assert extraction.gameweek == 1
     assert [p.action for p in extraction.picks] == [PickAction.SQUAD_INCLUDE, PickAction.CAPTAIN]
     assert VideoExtraction.model_validate_json(extraction.model_dump_json()) == extraction
+
+    assert extraction.model_copy(update={"gameweek": None}).gameweek is None
+    with pytest.raises(ValidationError):
+        VideoExtraction.model_validate(extraction.model_dump(mode="json") | {"gameweek": 99})
