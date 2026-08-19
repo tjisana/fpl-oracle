@@ -24,8 +24,9 @@ alongside it for the narrower case of a creator's own on-record claim
 about their past ranks (their own video/screenshot, no third party) —
 admissible only when specific, and weighted with a steeper discount than
 DOCUMENTED for the obvious self-report selection bias (see
-`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 1 (Andy,
-see below) as SELF_CLAIMED — all 6 at `Tier.CORE`; the other 14 are
+`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 2 (Andy and
+FPL Raptor, the latter promoted 2026-08-19 by the owner-approved harvest
+sweep) as SELF_CLAIMED — all 7 at `Tier.CORE`; the other 13 are
 `Tier.SECONDARY` at the default weight. But **0 of 20 still have an
 API-verified ID** — every fresh candidate this pass also failed live
 verification, in a few cases because a years-old article's entry ID has
@@ -240,7 +241,7 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-raptor",
         name="FPL Raptor",
         youtube_hint="FPL Raptor",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UC54QLWzsMifTRjNQ02z5pCw",
         channel_title="FPL Raptor",
         subscriber_count=178_000,
