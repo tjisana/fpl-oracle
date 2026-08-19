@@ -65,7 +65,10 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       v1 extraction scope.
 - [x] `fpl/client.py` + `fpl/players.py`: bootstrap-static client (6h-fresh cache),
       player DB, two-tier composite-key resolver. Tier 1: fuzzy >= 85 with a
-      composite-key contradiction VETO and subset-100 hardening (token_set_ratio
+      POSITION contradiction veto (always fatal), a TEAM contradiction veto that an
+      EXACT name overrides (the extractor's team knowledge goes stale across the
+      transfer window — 20 correct picks lost that way in the first live run), and
+      subset-100 hardening (token_set_ratio
       scores 100 on token-subset names — "Hall and" vs the real "Hall"). Tier 2
       (fuzzy 40-85): phonetic (jellyfish metaphone) + team + position must ALL
       agree. Team aliases for full club names (Tottenham→Spurs etc, built from the

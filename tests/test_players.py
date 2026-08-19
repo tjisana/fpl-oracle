@@ -384,15 +384,66 @@ class TestResolveFirstNameOnlyPathology:
 
 
 class TestResolveTier1ContradictionVeto:
-    def test_hint_contradicting_sole_winner_falls_through_not_matched(self, db: PlayerDB) -> None:
-        # Palmer (Chelsea, MID) is the sole exact web_name match for
-        # "Palmer", but a team hint that flatly contradicts him (Man
-        # City) must veto the Tier-1 accept — Palmer never played for
-        # Man City. With no Tier-2 corroboration available either (the
-        # hint points at the wrong club entirely), this must not match.
+    def test_stale_team_hint_does_not_veto_an_exact_name(self, db: PlayerDB) -> None:
+        # BEHAVIOUR CHANGE (2026-08-19), driven by the first live GW1 run:
+        # a contradicting TEAM no longer vetoes a sole EXACT name match.
+        # The extracting LLM infers team from its own PL knowledge, which
+        # lags the summer transfer window, so it emitted "Semenyo +
+        # Bournemouth" (Man City), "Isak + Newcastle" (Liverpool) and 18
+        # more — every one a correct player killed by a stale hint. An
+        # exact name plus an agreeing position outweighs a team string
+        # guessed from memory. Palmer here stands in for that case.
         result = db.resolve("Palmer", team_inferred="Man City", position_inferred="MID")
+        assert result.status == MatchStatus.MATCHED
+        assert result.player is not None
+        assert result.player.player_id == 10
+
+    def test_contradicting_position_still_vetoes_an_exact_name(self, db: PlayerDB) -> None:
+        # The other half of the rule: positions do NOT change mid-window,
+        # so a position contradiction stays disqualifying even for an
+        # exact name. This is what keeps the veto meaningful.
+        result = db.resolve("Palmer", team_inferred="Chelsea", position_inferred="GK")
         assert result.player is None
         assert result.status == MatchStatus.UNMATCHED
+
+    def test_contradicting_team_still_vetoes_a_non_exact_name(self, db: PlayerDB) -> None:
+        # The team veto's own regression pin. Deliberately NOT the "Hall
+        # and" case: the Hall decoy is a DEF, so a FWD hint is vetoed by
+        # the position rule before the team rule is ever consulted — a
+        # review mutation proved that deleting the team veto entirely
+        # left that test green. "Erling Halaand" is non-exact (a typo)
+        # but clears the token_sort_ratio backstop, so ONLY the team
+        # veto can stop it.
+        wrong_club = db.resolve("Erling Halaand", team_inferred="Everton", position_inferred="FWD")
+        assert wrong_club.player is None
+
+        right_club = db.resolve("Erling Halaand", team_inferred="Man City", position_inferred="FWD")
+        assert right_club.player is not None
+        assert right_club.player.web_name == "Haaland"
+
+    def test_exact_full_name_is_trusted_over_the_web_name_it_tied_with(self, db: PlayerDB) -> None:
+        # The van Dijk bug, pinned. FPL stores him as web_name "Van Dijk"
+        # with full name "Virgil van Dijk"; the raw string scores 100
+        # against BOTH, and whichever wins the max becomes
+        # `matched_target`. When that was the web_name, the exact FULL
+        # name was misread as a suspicious token-subset and a certain
+        # match was thrown away (live: "Virgil van Dijk" + Liverpool +
+        # DEF -> UNMATCHED at score 100). Exactness must be judged
+        # against both names, not just the one that won the tie.
+        result = db.resolve("Virgil van Dijk", team_inferred="Liverpool", position_inferred="DEF")
+        assert result.status == MatchStatus.MATCHED
+        assert result.player is not None
+        assert result.player.player_id == 3
+
+    def test_exact_name_override_requires_a_positively_agreeing_position(
+        self, db: PlayerDB
+    ) -> None:
+        # Overriding a contradicting team is only allowed when the
+        # position positively agrees — a missing position is not enough,
+        # or an exact surname plus a wrong club would match on the name
+        # alone.
+        assert db.resolve("Palmer", team_inferred="Man City", position_inferred="MID").player
+        assert db.resolve("Palmer", team_inferred="Man City", position_inferred=None).player is None
 
     def test_matching_hint_still_accepts_sole_winner(self, db: PlayerDB) -> None:
         # Sanity check on the veto: a CONFIRMING hint must not break the

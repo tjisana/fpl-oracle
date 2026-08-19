@@ -13,16 +13,32 @@ Tier 1 itself was silently over-trusting — round 2 hardens it):
     (a) it isn't tied with other candidates the composite key can't
         split (e.g. bare "Gabriel" with no team/position — three
         Arsenal players share that first name — stays AMBIGUOUS), AND
-    (b) the winning candidate doesn't explicitly CONTRADICT a supplied
-        team/position hint (team_agree is False, or position disagrees)
-        — a contradicted winner is never accepted, not even alone, AND
+    (b) the winning candidate doesn't CONTRADICT the supplied POSITION
+        (positions don't change mid-window, so a mismatch means the
+        wrong player), AND
+    (b2) for a NON-exact name, doesn't contradict the supplied TEAM
+        either. Team is the one hint that goes stale: the extracting
+        LLM infers it from its own PL knowledge, which lags the summer
+        transfer window — the first live GW1 run lost 20 correct picks
+        that way ("Isak + Newcastle", now Liverpool; "Semenyo +
+        Bournemouth", now Man City). An EXACT name (raw's token set
+        equals web_name or full name) therefore outranks a stale team
+        string, provided the position agrees. See `_tier1_trustworthy`.
+        RESIDUAL RISK, measured and accepted: a raw string that is a
+        sole exact match for A while being one ASR slip from a
+        same-position B at the hinted club (Davis/Davies,
+        McAtee/McAteer) now commits to A. 14 such pairs exist in the
+        live roster; none occurred in 478 live picks or 6,154 probe
+        cases. Mitigation if it ever bites: abstain to AMBIGUOUS when a
+        hinted-club rival agrees on position, agrees phonetically, and
+        scores >= ~78, AND
     (c) the winning score didn't come from a token-SUBSET match unless
         corroborated. `token_set_ratio` returns 100 whenever one name's
         tokens are a subset of the other's — "Hall and" vs a player
         web-named "Hall" scores 100 this way, as does bare "Mohamed"
         against anyone's "Mohamed <surname>" full name. A subset match
-        (raw's tokens != the matched string's tokens) is trusted only
-        with a phonetic agreement or a near-exact token_sort_ratio,
+        (raw's tokens != EITHER of the candidate's names) is trusted
+        only with a phonetic agreement or a near-exact token_sort_ratio,
         never on the raw score alone. Note this also structurally
         satisfies "no tie-split composite-key accept below 85 without
         phonetics" — token_set_ratio >= token_sort_ratio always holds,
@@ -320,21 +336,45 @@ class _Candidate:
     phonetic: bool
     team_agree: bool | None
     position_agree: bool | None
+    exact_name: bool = False
+    """Raw name's token set equals the candidate's web_name OR full name.
+
+    Computed against BOTH, not just `matched_target`: the two can score
+    the same 100 and `matched_target` keeps whichever won the max, so
+    "Virgil van Dijk" (full name, exact) was being judged against
+    web_name "Virgil" and treated as a suspicious token-subset."""
 
 
 def _tier1_trustworthy(name_raw: str, candidate: _Candidate) -> bool:
-    """Gate for accepting a Tier-1 (>=85) candidate outright. Combines the
-    contradiction veto and subset-100 hardening from the module docstring:
-    an explicit team/position contradiction is disqualifying regardless of
-    score, and a score that came from a token-subset match (raw's tokens
-    aren't literally equal to whichever string produced the score) needs a
-    phonetic or near-exact token_sort_ratio backstop — otherwise "Hall
-    and" matching a player web-named "Hall", or bare "Mohamed" matching
-    anyone's "Mohamed <surname>" full name, would sail through on a bare
-    100 that has nothing to do with the actual candidate."""
-    if candidate.team_agree is False or candidate.position_agree is False:
+    """Gate for accepting a Tier-1 (>=85) candidate outright.
+
+    Rules, in order:
+
+    1. A POSITION contradiction is always disqualifying — positions don't
+       change mid-window, so a mismatch means the wrong player.
+    2. A TEAM contradiction is disqualifying UNLESS the name is exact.
+       Team is the one composite-key field that goes stale: the extracting
+       LLM infers it from its own PL knowledge, which lags the summer
+       transfer window, so "Semenyo + Bournemouth" (now Man City) and
+       "Isak + Newcastle" (now Liverpool) are stale inference, not wrong
+       players. An exact name match plus an agreeing position is stronger
+       evidence than a team string the model guessed from memory.
+    3. An EXACT name (raw's token set equals web_name or full name) is
+       trusted. Anything else scored >=85 came from a token-subset match
+       and needs a phonetic or near-exact token_sort_ratio backstop —
+       otherwise "Hall and" matching a player web-named "Hall", or bare
+       "Mohamed" matching anyone's "Mohamed <surname>" full name, would
+       sail through on a bare 100 that has nothing to do with the
+       candidate."""
+    if candidate.position_agree is False:
         return False
-    if _token_set(name_raw) == _token_set(candidate.matched_target):
+    if candidate.team_agree is False:
+        # Overriding a contradicting team demands BOTH an exact name and a
+        # position that positively agrees — not merely one that failed to
+        # contradict. All 478 picks in the live run carried a position, so
+        # this costs nothing and keeps the override narrow.
+        return candidate.exact_name and candidate.position_agree is True
+    if candidate.exact_name:
         return True
     if candidate.phonetic:
         return True
@@ -415,6 +455,7 @@ class PlayerDB:
         parsed_position = _parse_position(position_inferred)
 
         scored: list[_Candidate] = []
+        raw_tokens = _token_set(name_raw)
         for player in self._players.values():
             fuzzy, matched_target = _fuzzy_score_detail(name_raw, player)
             team_agree = _team_agreement(
@@ -423,8 +464,19 @@ class PlayerDB:
             position_agree = None if parsed_position is None else player.position == parsed_position
             mp_web, mp_second = self._player_metaphones[player.player_id]
             phonetic = _phonetic_agree(name_raw, mp_web, mp_second)
+            exact_name = raw_tokens == _token_set(player.web_name) or raw_tokens == _token_set(
+                player.full_name
+            )
             scored.append(
-                _Candidate(player, fuzzy, matched_target, phonetic, team_agree, position_agree)
+                _Candidate(
+                    player,
+                    fuzzy,
+                    matched_target,
+                    phonetic,
+                    team_agree,
+                    position_agree,
+                    exact_name,
+                )
             )
 
         if not scored:
