@@ -58,8 +58,14 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       one over-long `reasoning` sentence can't drop a whole video's picks.
       Player-less chip-timing plans ("wildcard GW8") are knowingly out of
       v1 extraction scope.
-- [ ] `fpl/client.py` + `fpl/players.py`: bootstrap-static client, player DB,
-      composite-key resolver (rapidfuzz on name, validated against team+position)
+- [x] `fpl/client.py` + `fpl/players.py`: bootstrap-static client (6h-fresh cache),
+      player DB, two-tier composite-key resolver. Tier 1: fuzzy >= 85 with a
+      composite-key contradiction VETO and subset-100 hardening (token_set_ratio
+      scores 100 on token-subset names — "Hall and" vs the real "Hall"). Tier 2
+      (fuzzy 40-85): phonetic (jellyfish metaphone) + team + position must ALL
+      agree. Team aliases for full club names (Tottenham→Spurs etc, built from the
+      live payload). Empirically verified on the real 592-player roster: 1,780-case
+      mangling probe = 0 wrong matches, garbage 20/20 UNMATCHED. Reviewed + merged.
 - [x] Extraction prompt + Claude structured-output call — `extract/extractor.py` +
       `extract/prompts/extract_picks.txt`. claude-opus-5 via `messages.parse` with an
       UNCONSTRAINED wire schema (no player_id, no bounds — parse then only fails on
