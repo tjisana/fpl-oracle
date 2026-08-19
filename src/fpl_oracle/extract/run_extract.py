@@ -14,9 +14,9 @@ consensus (Phase 3) consumes only MATCHED picks.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
+import anthropic
 from pydantic import BaseModel
 
 from fpl_oracle.extract.extractor import ExtractionError, extract_picks
@@ -53,8 +53,10 @@ GW1_TITLE_PATTERNS = (
     "my team",
     "team selection",
     "final team",
-    "draft",
     "wildcard",
+    # "draft" is deliberately absent: FPL Draft is a different game mode
+    # whose picks would poison classic-mode consensus, and GW1 reveal
+    # titles overwhelmingly carry a gw1/team pattern anyway.
 )
 # Guard against matching later gameweeks: "gw1" must not be "gw10"-"gw19" etc.
 _GW1_FALSE_STEMS = (
@@ -66,14 +68,11 @@ _GW1_FALSE_STEMS = (
 
 def is_gw1_team_video(title: str) -> bool:
     lowered = title.lower()
-    if any(stem in lowered for stem in _GW1_FALSE_STEMS):
-        # a "GW12" title can still qualify via a non-numeric pattern
-        lowered_wo_gw = lowered
-        for stem in _GW1_FALSE_STEMS:
-            lowered_wo_gw = lowered_wo_gw.replace(stem, " ")
-        return any(
-            p in lowered_wo_gw for p in GW1_TITLE_PATTERNS if not p.startswith(("gw", "gameweek"))
-        )
+    # Strip gw10-gw19-style stems first, then check ALL patterns against
+    # the stripped title: "GW1 TEAM + GW17 PLANS" must still match via its
+    # genuine "gw1", which survives the stripping ("gw17" does not).
+    for stem in _GW1_FALSE_STEMS:
+        lowered = lowered.replace(stem, " ")
     return any(p in lowered for p in GW1_TITLE_PATTERNS)
 
 
@@ -135,7 +134,7 @@ def pick_gw1_video(creator: Creator, registry: list[Creator]) -> VideoInfo | Non
     try:
         durations = get_video_durations([v.video_id for v in attributed])
     except YouTubeApiError as e:
-        print(f"run_extract: duration lookup failed ({e}); keeping all", file=sys.stderr)
+        logger.warning("run_extract: duration lookup failed (%s); keeping all", e)
         durations = {}
     candidates = [
         v for v in filter_min_duration(attributed, durations) if is_gw1_team_video(v.title)
@@ -152,10 +151,14 @@ def render_match_quality(resolved: list[ResolvedExtraction]) -> str:
         n_matched = sum(1 for res in r.resolutions if res.status is MatchStatus.MATCHED)
         total += len(r.resolutions)
         matched += n_matched
+        gw_flag = "" if e.gameweek in (1, None) else " — **WRONG GAMEWEEK?**"
         lines += [
-            f"## {e.creator_id} — {e.video_title}",
+            f"## {e.creator_id} — {e.video_title} (`{e.video_id}`)",
             "",
-            f"- Picks: {len(r.resolutions)}, matched: {n_matched}, gameweek: {e.gameweek}",
+            (
+                f"- Picks: {len(r.resolutions)}, matched: {n_matched}, "
+                f"gameweek: {e.gameweek}{gw_flag}"
+            ),
         ]
         for res in r.resolutions:
             if res.status is not MatchStatus.MATCHED:
@@ -189,51 +192,60 @@ def run_extraction(
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved: list[ResolvedExtraction] = []
     failures: list[tuple[str, str]] = []
-
-    for creator in creators:
-        video = pick_gw1_video(creator, REGISTRY)
-        if video is None:
-            logger.info("run_extract: %s — no GW1 team video found", creator.creator_id)
-            failures.append((creator.creator_id, "no GW1 team video found"))
-            continue
-        transcript = fetch_transcript(video.video_id)
-        if transcript is None:
-            failures.append((creator.creator_id, f"no transcript for video {video.video_id}"))
-            continue
-        try:
-            extraction = extract_picks(
-                creator_id=creator.creator_id,
-                creator_name=creator.name,
-                video_id=video.video_id,
-                video_title=video.title,
-                published_at=video.published_at,
-                transcript_text=transcript.full_text,
-                channel_context=channel_context_for(creator.creator_id),
-            )
-        except ExtractionError as e:
-            logger.warning("run_extract: %s — extraction FAILED: %s", creator.creator_id, e)
-            failures.append((creator.creator_id, str(e)))
-            continue
-        r = resolve_extraction(extraction, db)
-        (output_dir / f"{video.video_id}.json").write_text(r.model_dump_json(indent=2))
-        logger.info(
-            "run_extract: %s — %d picks (%d matched) from %r",
-            creator.creator_id,
-            len(r.resolutions),
-            sum(1 for res in r.resolutions if res.status is MatchStatus.MATCHED),
-            video.title,
-        )
-        resolved.append(r)
-
-    report = render_match_quality(resolved)
-    if failures:
-        report += (
-            "\n## No extraction\n\n"
-            + "\n".join(f"- {cid}: {reason}" for cid, reason in failures)
-            + "\n"
-        )
     report_path = output_dir / "match_quality.md"
-    report_path.write_text(report)
+
+    # The report is flushed in `finally`: even if a fail-fast error escapes
+    # mid-run (e.g. RequestBlocked from transcript fetching, deliberately
+    # environmental), completed extractions still produce the deliverable.
+    try:
+        for creator in creators:
+            try:
+                video = pick_gw1_video(creator, REGISTRY)
+            except YouTubeApiError as e:
+                logger.warning("run_extract: %s — video listing failed: %s", creator.creator_id, e)
+                failures.append((creator.creator_id, f"video listing failed: {e}"))
+                continue
+            if video is None:
+                logger.info("run_extract: %s — no GW1 team video found", creator.creator_id)
+                failures.append((creator.creator_id, "no GW1 team video found"))
+                continue
+            transcript = fetch_transcript(video.video_id)
+            if transcript is None:
+                failures.append((creator.creator_id, f"no transcript for video {video.video_id}"))
+                continue
+            try:
+                extraction = extract_picks(
+                    creator_id=creator.creator_id,
+                    creator_name=creator.name,
+                    video_id=video.video_id,
+                    video_title=video.title,
+                    published_at=video.published_at,
+                    transcript_text=transcript.full_text,
+                    channel_context=channel_context_for(creator.creator_id),
+                )
+            except (ExtractionError, anthropic.APIError) as e:
+                logger.warning("run_extract: %s — extraction FAILED: %s", creator.creator_id, e)
+                failures.append((creator.creator_id, str(e)))
+                continue
+            r = resolve_extraction(extraction, db)
+            (output_dir / f"{video.video_id}.json").write_text(r.model_dump_json(indent=2))
+            logger.info(
+                "run_extract: %s — %d picks (%d matched) from %r",
+                creator.creator_id,
+                len(r.resolutions),
+                sum(1 for res in r.resolutions if res.status is MatchStatus.MATCHED),
+                video.title,
+            )
+            resolved.append(r)
+    finally:
+        report = render_match_quality(resolved)
+        if failures:
+            report += (
+                "\n## No extraction\n\n"
+                + "\n".join(f"- {cid}: {reason}" for cid, reason in failures)
+                + "\n"
+            )
+        report_path.write_text(report)
     return report_path
 
 

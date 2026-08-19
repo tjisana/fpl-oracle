@@ -25,7 +25,7 @@ class TestIsGw1TeamVideo:
         [
             "MY GW1 TEAM REVEAL",
             "FPL Gameweek 1 team selection!",
-            "MY FPL DRAFT | 25/26",
+            "GW1 TEAM + GW17 PLANS",
             "FINAL TEAM GW 1",
             "WILDCARD ALREADY?!",
         ],
@@ -40,6 +40,7 @@ class TestIsGw1TeamVideo:
             "Gameweek 15 pod",
             "SEASON REVIEW 2025/26",
             "TOP 10 DEFENDERS THIS SEASON",
+            "FPL DRAFT LEAGUE: MY DRAFT",
         ],
     )
     def test_negatives(self, title):
@@ -48,6 +49,11 @@ class TestIsGw1TeamVideo:
     def test_gw1x_title_can_still_match_on_non_numeric_pattern(self):
         assert is_gw1_team_video("GW14 WILDCARD TEAM REVEAL")
         assert not is_gw1_team_video("GW14 CAPTAIN PICKS")
+
+    def test_genuine_gw1_survives_alongside_gw1x_mention(self):
+        # review finding: the old guard discarded gw patterns entirely
+        assert is_gw1_team_video("GW1 TEAM + GW17 PLANS")
+        assert is_gw1_team_video("MY GW1 SQUAD | THOUGHTS ON GW15")
 
 
 def _pick(**overrides) -> Pick:
