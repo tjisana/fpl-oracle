@@ -92,7 +92,12 @@ Transcripts mangle names: "Sacca"→Saka, "Hall and"→Haaland, "M'bappe",
    score <85).
 2. Match on the composite key (name + inferred team + inferred position),
    never the bare string — "Gabriel" alone matches Magalhaes, Martinelli AND
-   Jesus; with team+position it's unambiguous.
+   Jesus; with team+position it's unambiguous. ONE EXCEPTION, learned live:
+   an EXACT name match (raw tokens == web_name or full name) outranks a
+   contradicting TEAM, because the extracting LLM infers team from training
+   knowledge that lags the summer transfer window ("Isak + Newcastle" when
+   he is at Liverpool). A contradicting POSITION is always fatal, and a
+   non-exact name still needs the team to agree.
 3. NEVER auto-accept a match below threshold; queue for review with the
    surrounding transcript sentence.
 4. NEVER store an unresolved raw name as if it were a player. Hallucinated
