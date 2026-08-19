@@ -60,7 +60,13 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       v1 extraction scope.
 - [ ] `fpl/client.py` + `fpl/players.py`: bootstrap-static client, player DB,
       composite-key resolver (rapidfuzz on name, validated against team+position)
-- [ ] Extraction prompt + Claude structured-output call
+- [x] Extraction prompt + Claude structured-output call — `extract/extractor.py` +
+      `extract/prompts/extract_picks.txt`. claude-opus-5 via `messages.parse` with an
+      UNCONSTRAINED wire schema (no player_id, no bounds — parse then only fails on
+      truncation); strict validation into Pick/VideoExtraction happens in a
+      retry-on-ValidationError loop (max 2) with error feedback. Reviewed, fixes
+      verified, merged. On the first real batch run: verify cache_read_input_tokens > 0
+      (system prompt sits just above the 512-token cache minimum).
 - [ ] Run across all available "My GW1 Team" videos; review match quality
 - [ ] SELF_CLAIMED harvest sweep (MUST land before the GW1 weight freeze, else
       it waits a year): for every creator, locate season-review / season-opener
