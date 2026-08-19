@@ -81,7 +81,12 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       retry-on-ValidationError loop (max 2) with error feedback. Reviewed, fixes
       verified, merged. On the first real batch run: verify cache_read_input_tokens > 0
       (system prompt sits just above the 512-token cache minimum).
-- [ ] Run across all available "My GW1 Team" videos; review match quality —
+- [x] Run across all available "My GW1 Team" videos; review match quality — DONE:
+      14 creators extracted, 390/478 picks resolved (82%) after two resolver fixes
+      found by the human review (exact-name-vs-matched_target; stale team hints
+      across the transfer window). Owner reviewed 2026-08-19. Remaining unresolved
+      are genuine ambiguity ("Bruno"), extraction noise, and descriptive phrases.
+      4 creators had no GW1 video yet — deadline-morning rerun should catch them.
       RUNNER MERGED (reviewed + verified): `extract/run_extract.py` — per creator:
       GW1-title-matched video (gw1X false-stem guard, Shorts filter, shared-channel
       attribution), extract, resolve every pick (MATCHED → player_id stamped;
@@ -89,7 +94,12 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       Per-creator failures non-fatal incl. anthropic.APIError; report flushed in
       finally. Outputs data/extractions/{video_id}.json + match_quality.md.
       REMAINING: the live run + HUMAN review of match_quality.md.
-- [ ] SELF_CLAIMED harvest sweep — INFRASTRUCTURE MERGED (reviewed + verified):
+- [x] SELF_CLAIMED harvest sweep — DONE: 31 quote-verified claims across 5 creators,
+      owner-approved 2026-08-19 (Andy = no-op, already in registry; Raptor and Harry
+      promoted to SELF_CLAIMED; Pras rejected as vague/mis-attributed). SUPERSEDED
+      IN PRACTICE by the API-verification breakthrough — 19/20 creators now have
+      real history, so claim tiers are inert for weighting (kept as provenance).
+      Original spec: INFRASTRUCTURE MERGED (reviewed + verified):
       `roster/harvest.py` (season-review title matcher, 200-deep/May-1-cutoff uploads
       paging, transcript fetch via existing ingest machinery, manifest),
       `roster/claim_verify.py` (mechanical casefolded exact-substring quote check),
