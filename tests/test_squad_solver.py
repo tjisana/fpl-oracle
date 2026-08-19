@@ -9,15 +9,26 @@ import pytest
 from fpl_oracle.consensus.scoring import PlayerScore
 from fpl_oracle.fpl.players import Player, Position
 from fpl_oracle.solver.squad import (
-    BUDGET_M,
-    MAX_PER_CLUB,
-    POSITION_QUOTA,
-    SQUAD_SIZE,
-    XI_SIZE,
+    BENCH_WEIGHT,
     InfeasibleSquadError,
     build_squad,
     coefficient,
 )
+
+# THE OFFICIAL FPL RULES, hardcoded on purpose.
+#
+# An earlier version of this file imported SQUAD_SIZE / BUDGET_M /
+# MAX_PER_CLUB / XI_SIZE / POSITION_QUOTA from the module under test and
+# asserted them against themselves — so every constant was trivially
+# "correct" and a review's mutation sweep found 8 of 12 mutations
+# surviving, including deleting the XI's DEF>=3 floor (which yields an
+# ILLEGAL 1-2-5-3 XI on live data). These literals are the spec; if the
+# module disagrees with them, the module is wrong.
+FPL_SQUAD_SIZE = 15
+FPL_BUDGET_M = 100.0
+FPL_MAX_PER_CLUB = 3
+FPL_XI_SIZE = 11
+FPL_QUOTA = {Position.GK: 2, Position.DEF: 5, Position.MID: 5, Position.FWD: 3}
 
 
 def _player(pid: int, position: Position, price_m: float, team_id: int) -> Player:
@@ -77,6 +88,104 @@ class TestCoefficient:
         assert enabler < premium
 
 
+class TestConstraintsActuallyBind:
+    """Each test builds a pool where the named rule is the ONLY thing
+    stopping a better-scoring squad, so deleting that constraint changes
+    the result. Without these, a constraint can be removed silently."""
+
+    def test_club_cap_binds(self) -> None:
+        # One club holds the cheapest, best-backed player at every
+        # position; only the 3-per-club rule stops the solver taking them.
+        # Price is held CONSTANT so the club cap is the only thing in play:
+        # club 1's players are the only backed ones, so consensus wants as
+        # many as it can take and only the rule stops it.
+        pool, scores, pid = [], {}, 1
+        for position, count in (
+            (Position.GK, 6),
+            (Position.DEF, 14),
+            (Position.MID, 14),
+            (Position.FWD, 10),
+        ):
+            for i in range(count):
+                in_club_1 = i < 5
+                pool.append(_player(pid, position, 5.0, 1 if in_club_1 else 10 + pid))
+                if in_club_1:
+                    scores[pid] = _score(pid, 1.0)
+                pid += 1
+        squad = build_squad(pool, scores, [], 0)
+        from collections import Counter as _C
+
+        by_id = {p.player_id: p for p in pool}
+        clubs = _C(by_id[p.player_id].team_id for p in squad.players)
+        assert clubs[1] <= FPL_MAX_PER_CLUB
+
+    def test_budget_binds(self) -> None:
+        # Every player is backed, so without the budget the solver would
+        # take the most expensive 15 it can.
+        pool, scores, pid = [], {}, 1
+        for position, count in (
+            (Position.GK, 4),
+            (Position.DEF, 8),
+            (Position.MID, 8),
+            (Position.FWD, 6),
+        ):
+            for _ in range(count):
+                pool.append(_player(pid, position, 9.0 if pid % 2 else 4.0, pid % 8))
+                scores[pid] = _score(pid, 1.0)
+                pid += 1
+        squad = build_squad(pool, scores, [], 0)
+        assert squad.total_cost_m <= FPL_BUDGET_M
+
+    def test_xi_defender_floor_binds(self) -> None:
+        # Defenders are cheap and UNBACKED while mids/forwards are backed,
+        # so the only reason to start 3 defenders is the rule itself.
+        pool, scores, pid = [], {}, 1
+        for position, count, price in (
+            (Position.GK, 4, 4.0),
+            (Position.DEF, 8, 4.0),
+            (Position.MID, 8, 7.0),
+            (Position.FWD, 6, 7.0),
+        ):
+            for _ in range(count):
+                pool.append(_player(pid, position, price, pid % 8))
+                if position in (Position.MID, Position.FWD):
+                    scores[pid] = _score(pid, 1.0)
+                pid += 1
+        squad = build_squad(pool, scores, [], 0)
+        from collections import Counter as _C
+
+        by_id = {p.player_id: p for p in pool}
+        xi = _C(by_id[p.player_id].position for p in squad.starting_xi)
+        assert xi[Position.DEF] >= 3, "XI must field at least 3 defenders"
+        assert xi[Position.GK] == 1, "XI must field exactly 1 goalkeeper"
+        assert xi[Position.FWD] >= 1, "XI must field at least 1 forward"
+        assert sum(xi.values()) == FPL_XI_SIZE
+
+    def test_single_keeper_rule_binds(self) -> None:
+        # Both keepers are cheap AND fully backed while every outfielder is
+        # unbacked, so on value alone the solver would happily start two —
+        # only the "exactly 1 GK in the XI" rule stops it. FPL allows one
+        # keeper on the pitch; starting two is an illegal team.
+        pool, scores, pid = [], {}, 1
+        for _ in range(2):  # the tempting keepers
+            pool.append(_player(pid, Position.GK, 5.0, 30 + pid))
+            scores[pid] = _score(pid, 1.0)
+            pid += 1
+        for position, count in ((Position.DEF, 8), (Position.MID, 8), (Position.FWD, 6)):
+            for _ in range(count):
+                pool.append(_player(pid, position, 4.0, 30 + pid))  # unbacked
+                pid += 1
+
+        squad = build_squad(pool, scores, [], 0)
+        from collections import Counter as _C
+
+        by_id = {p.player_id: p for p in pool}
+        xi = _C(by_id[p.player_id].position for p in squad.starting_xi)
+        assert (
+            xi[Position.GK] == 1
+        ), f"XI fields {xi[Position.GK]} goalkeepers — FPL allows exactly 1"
+
+
 class TestBuildSquad:
     def test_obeys_every_fpl_squad_rule(self) -> None:
         pool = _pool()
@@ -85,11 +194,11 @@ class TestBuildSquad:
         positions = Counter(by_id[p.player_id].position for p in squad.players)
         clubs = Counter(by_id[p.player_id].team_id for p in squad.players)
 
-        assert len(squad.players) == SQUAD_SIZE
-        for position, quota in POSITION_QUOTA.items():
+        assert len(squad.players) == FPL_SQUAD_SIZE
+        for position, quota in FPL_QUOTA.items():
             assert positions[position] == quota
-        assert squad.total_cost_m <= BUDGET_M
-        assert max(clubs.values()) <= MAX_PER_CLUB
+        assert squad.total_cost_m <= FPL_BUDGET_M
+        assert max(clubs.values()) <= FPL_MAX_PER_CLUB
 
     def test_obeys_starting_xi_formation_rules(self) -> None:
         pool = _pool()
@@ -97,11 +206,11 @@ class TestBuildSquad:
         by_id = {p.player_id: p for p in pool}
         xi = Counter(by_id[p.player_id].position for p in squad.starting_xi)
 
-        assert len(squad.starting_xi) == XI_SIZE
+        assert len(squad.starting_xi) == FPL_XI_SIZE
         assert xi[Position.GK] == 1
         assert xi[Position.DEF] >= 3
         assert xi[Position.FWD] >= 1
-        assert len(squad.bench) == SQUAD_SIZE - XI_SIZE
+        assert len(squad.bench) == FPL_SQUAD_SIZE - FPL_XI_SIZE
 
     def test_starters_are_a_subset_of_the_squad(self) -> None:
         squad = build_squad(_pool(), {}, [], 0)
@@ -116,6 +225,26 @@ class TestBuildSquad:
         bench_avg = sum(p.price_m for p in squad.bench) / len(squad.bench)
         xi_avg = sum(p.price_m for p in squad.starting_xi) / len(squad.starting_xi)
         assert bench_avg < xi_avg
+
+    def test_bench_weight_stays_inside_its_measured_safe_range(self) -> None:
+        # A GUARD ON THE CONSTANT, not a behavioural test — and deliberately
+        # so. The distortion this protects against was measured on the live
+        # pool during review: BENCH_WEIGHT 0.0/0.1/0.5 all yield the minimal
+        # £16.5m bench and an £83.5m XI, while 1.0 diverts £0.5m OUT of the
+        # XI into the bench.
+        #
+        # Reproducing that synthetically needs a pool with £0.5m price
+        # granularity, a binding budget, AND a bench-only slot (a second
+        # keeper) all at once; several attempts produced pools where the
+        # solver simply started the "trap" player or had no way to free up
+        # exactly £0.5m, so the mutation survived. Rather than ship a test
+        # that looks behavioural but proves nothing, this pins the range the
+        # measurement actually validated.
+        assert 0.0 < BENCH_WEIGHT <= 0.5, (
+            f"BENCH_WEIGHT={BENCH_WEIGHT} is outside the range measured as "
+            "non-distorting (0, 0.5]; above it, budget leaks from the XI to "
+            "the bench. Re-measure on live data before widening this."
+        )
 
     def test_consensus_breaks_ties_within_a_price(self) -> None:
         # Consensus is the tiebreaker AMONG equally-priced players — it does
@@ -150,6 +279,27 @@ class TestBuildSquad:
         squad = build_squad(pool, {}, [pool[0].player_id], 2)
         assert squad.relaxed_captaincy is True
         assert squad.captain_options_required < 2
+
+    def test_empty_captain_options_cannot_report_a_phantom_guarantee(self) -> None:
+        # Asking for 2 options while supplying NONE must relax honestly,
+        # not silently skip the constraint and still claim required=2.
+        squad = build_squad(_pool(), {}, [], 2)
+        assert squad.captain_options_included == []
+        assert squad.captain_options_required == 0
+        assert squad.relaxed_captaincy is True
+
+    def test_duplicate_player_ids_rejected(self) -> None:
+        pool = _pool()
+        with pytest.raises(ValueError, match="duplicate player_id"):
+            build_squad([*pool, pool[0]], {}, [], 0)
+
+    def test_doubtful_multiplier_discounts_a_player(self) -> None:
+        # The availability filter's DOUBTFUL 0.75 must actually reach the
+        # objective, or "capped" is a promise nothing keeps.
+        p = _player(1, Position.MID, 8.0, 1)
+        full = coefficient(p, _score(1, 1.0))
+        doubtful = coefficient(p, _score(1, 1.0), availability_multiplier=0.75)
+        assert doubtful == pytest.approx(full * 0.75)
 
     def test_empty_pool_raises(self) -> None:
         with pytest.raises(InfeasibleSquadError, match="empty player pool"):
