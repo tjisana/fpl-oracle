@@ -28,6 +28,9 @@ class TestIsGw1TeamVideo:
             "GW1 TEAM + GW17 PLANS",
             "FINAL TEAM GW 1",
             "WILDCARD ALREADY?!",
+            # live misses from the FFH channel (persona reveals)
+            "FPL Salah's FINAL FPL Team 🔒 | 4 x Top 1k! 💥 | Fantasy Premier League 2026/27",
+            "BigManBakar's FINAL FPL Team 🔒 | 4th In The World!🌍| Fantasy Premier League 2026/27",
         ],
     )
     def test_positives(self, title):
