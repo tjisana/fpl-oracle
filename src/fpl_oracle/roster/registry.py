@@ -16,35 +16,63 @@ story):
    then checks every candidate — including everything rejected last
    time — against that.
 
-Result: real names are now solid for most of tier 1, and a `Verification.
-DOCUMENTED` tier was added for creators a reputable third party (BBC,
-FFS) has publicly attributed specific finishes to under their real name,
-even without a pullable ID. A `Verification.SELF_CLAIMED` tier exists
-alongside it for the narrower case of a creator's own on-record claim
-about their past ranks (their own video/screenshot, no third party) —
-admissible only when specific, and weighted with a steeper discount than
-DOCUMENTED for the obvious self-report selection bias (see
-`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 3 (Andy,
-FPL Raptor and FPL Harry — the latter two promoted 2026-08-19 by the
-owner-approved harvest sweep) as SELF_CLAIMED — all 8 at `Tier.CORE`;
-the other 12 are `Tier.SECONDARY` at the default weight. But **0 of 20 still have an
-API-verified ID** — every fresh candidate this pass also failed live
-verification, in a few cases because a years-old article's entry ID has
-since come to belong to a completely different, unrelated manager (see
-notes below; worth remembering as a standing risk, not just a one-off).
+RESOLVED 2026-08-19 — 19 of 20 creators now have API-VERIFIED history.
+The breakthrough was a technique, not a search: `entry/{id}/` returns a
+manager's private leagues, and `leagues-classic/{lid}/standings/` returns
+`league.admin_entry` — the creator who CREATED their own branded league
+("youtube.com/FPLRaptor" -> its admin IS FPL Raptor). Seeded from one
+self-disclosed ID, this snowballs across the creator ecosystem with no
+name-guessing. Every ID here was pulled and confirmed against the LIVE
+API, never from a web page (see the fabrication caution below).
 
-The mechanism behind that, now understood rather than just observed:
-FPL entry IDs are assigned PER-SEASON — every manager registers fresh
-each season and IDs are handed out sequentially from wherever that
-season's counter starts, they aren't a persistent per-person identifier
-that carries across years. So an old article's ID pointing at a
-complete stranger isn't bad luck or a typo, it's structural: that
-numeric ID almost certainly belonged to someone else once the season
-rolled over. The same logic caps what a *self*-disclosed ID is worth,
-too — even a creator's own claimed ID (e.g. in a video description)
-only verifies anything for the season in which it was disclosed; it
-can't be assumed to be the same ID in a different season without a
-fresh, contemporaneous check.
+The histories independently reproduce the claim ledger recorded earlier
+from unrelated third-party sources — the strongest evidence the IDs are
+right: Andy's 588 (plus his 1294 and 9975), Heisenberg's 836 (BBC),
+Focal's 3405 (FFS), Gianni's "11 of 14 top-100k" and "eight top-50k"
+(both exact), Holly's "two top-10k", Harry's "seven top-15k / five
+consecutive top-10k", and Big Man Bakar's extraordinary "world #4"
+claim, which this file previously flagged as unverifiable: TRUE, 2014/15,
+rank 4.
+
+Weights now come from `compute_weight()` on real multi-season history —
+the API tier the system was designed around but had never been able to
+exercise. This is recency-weighted (last 3 seasons dominate), unlike the
+claim tiers' best-ever + consistency scoring, so it re-ranks the roster
+substantially. Two corrections it forced:
+
+- FPL BlackBox: the seed's "multiple top-10k finishes" was RIGHT and the
+  FFS reading was wrong. Entry 252 (Mark Sutherns) has finishes of 42,
+  115, 268, 382, 1367, 2044, 2061, 2217, 2392, 3285 across 20 seasons.
+  Separately, the harvest sweep extracted a "1.1 million" rank from a
+  BlackBox season-review video and attributed it to Mark — it is his
+  CO-HOST Az Phillips (entry 246, 2025/26 = 1,148,135). A shared-channel
+  speaker-attribution miss the quote-anchoring rule cannot catch, since
+  the quote was genuinely spoken; only the API data disambiguated it.
+- FPL Harry: the FFS-article attribution of entry 1320 is WRONG (that is
+  Zinedine Bashir). 3054 is correct, and it also confirms the real name
+  "Harry Daniels" this file had held only as an unverified guess.
+
+The claim-tier evidence (`documented_finishes` / `self_claimed_finishes`)
+is deliberately RETAINED below even where API history supersedes it: it
+documents provenance, and it now serves as corroboration of the IDs.
+
+FPL Dylan is the one creator with no discoverable entry — not in any
+creator league reached by the crawl, no entry link in his descriptions.
+He remains UNVERIFIED at the default weight.
+
+CORRECTING AN EARLIER THEORY IN THIS FILE: a previous pass concluded FPL
+entry IDs are assigned per-season and are "not a persistent per-person
+identifier". The data gathered here refutes that — every ID below returns
+one manager's whole career under a single ID (252 goes back to 2006/07,
+20 seasons; 41 covers 16). IDs are persistent per account. The old
+observation that stale article IDs resolve to strangers is better
+explained by those sources simply being WRONG (one such table was found
+to be fabricated outright, and the FFS attribution of entry 1320 to FPL
+Harry is demonstrably a different person) than by ID recycling.
+
+Consequence: these IDs do NOT need re-verifying every August. Re-pull the
+histories to pick up a new season, and re-check an ID only if its
+`entry/{id}/` name stops matching the creator.
 
 Institutional brands (Fantasy Football Scout, Fantasy Football Hub) were
 dropped entirely per the owner's instruction — no person, no track
@@ -63,7 +91,7 @@ to never trust a numeric FPL ID from search/fetch summarization without
 that live check, even when it's presented with citations.
 """
 
-from fpl_oracle.roster.models import ClaimedFinish, Creator, Tier, Verification
+from fpl_oracle.roster.models import ClaimedFinish, Creator, PastFinish, Tier, Verification
 from fpl_oracle.roster.weights import weight_for
 
 _BBC_FPL_EXPERTS = "https://feeds.bbci.co.uk/sport/articles/c4gj7pl3p82o"
@@ -71,6 +99,131 @@ _FFS_PRO_PUNDITS = "https://www.fantasyfootballscout.co.uk/the-ffs-pro-pundits"
 _ANDY_SEASON_REVIEW = "https://www.youtube.com/watch?v=UW85Hel20QE"
 _RAPTOR_SEASON_GUIDE = "https://www.youtube.com/watch?v=c1MyHESd5pA&t=111"
 _HARRY_SEASON_REVIEW = "https://www.youtube.com/watch?v=lNnB4-KxC_A&t=259"
+
+
+def _past(spec: str) -> list[PastFinish]:
+    """Parse a compact "season:rank season:rank" string into PastFinish rows.
+
+    The histories below were pulled LIVE from `entry/{id}/history/` on
+    2026-08-19 (see each creator's `fpl_team_id`) — they are API facts, not
+    claims. Kept in this compact form so ~300 season rows stay readable.
+    A rank of "-" means the API returned no rank for that season (it can
+    return null/0 — e.g. a season the manager did not play). Recorded
+    rather than dropped, so a re-pull round-trips exactly; `compute_weight`
+    skips them instead of scoring them as a worst-possible finish.
+    """
+    return [
+        PastFinish(season_name=season, rank=None if rank == "-" else int(rank))
+        for season, rank in (tok.split(":") for tok in spec.split())
+    ]
+
+
+_API_HISTORY: dict[str, list[PastFinish]] = {
+    "lets-talk-fpl": _past(
+        "2010/11:20698 2011/12:10463 2012/13:15557 2013/14:104345 2014/15:8492 "
+        "2015/16:92554 2016/17:4935 2017/18:21436 2018/19:12731 2019/20:162555 "
+        "2020/21:1294 2021/22:9975 2022/23:35711 2023/24:44067 2024/25:77007 "
+        "2025/26:588"
+    ),
+    "fpl-harry": _past(
+        "2016/17:10979 2017/18:752900 2018/19:13845 2019/20:125929 2020/21:3819 "
+        "2021/22:1345 2022/23:510 2023/24:5401 2024/25:6470 2025/26:26743"
+    ),
+    "fpl-raptor": _past(
+        "2020/21:129753 2021/22:35078 2022/23:10198 2023/24:29860 2024/25:12592 2025/26:530214"
+    ),
+    "pras": _past(
+        "2010/11:548037 2011/12:136098 2012/13:6378 2013/14:56696 2014/15:8682 "
+        "2015/16:90972 2016/17:75129 2017/18:22677 2018/19:4252 2019/20:32282 "
+        "2020/21:11549 2021/22:4841 2022/23:37971 2023/24:21656 2024/25:4184 "
+        "2025/26:192790"
+    ),
+    "fpl-mate": _past(
+        "2012/13:1333371 2013/14:1822004 2015/16:210654 2016/17:462777 "
+        "2017/18:4423610 2018/19:1377380 2019/20:62690 2020/21:119546 2021/22:243 "
+        "2022/23:34863 2023/24:126994 2024/25:355412 2025/26:123422"
+    ),
+    "fpl-focal": _past(
+        "2011/12:529142 2012/13:270849 2013/14:22327 2014/15:43767 2015/16:89065 "
+        "2016/17:155308 2017/18:41632 2018/19:104353 2019/20:80619 2020/21:53719 "
+        "2021/22:17391 2022/23:- 2023/24:49772 2024/25:3405 2025/26:25669"
+    ),
+    "holly-shand": _past(
+        "2014/15:170951 2015/16:5707 2016/17:88806 2017/18:282648 2018/19:6720 "
+        "2019/20:67905 2020/21:35354 2021/22:93929 2022/23:156378 2023/24:222633 "
+        "2024/25:77007 2025/26:240001"
+    ),
+    "fpl-blackbox": _past(
+        "2006/07:2217 2007/08:2392 2008/09:268 2009/10:29460 2010/11:3285 2011/12:382 "
+        "2012/13:2044 2013/14:192837 2014/15:42 2015/16:28329 2016/17:115 "
+        "2017/18:11458 2018/19:1367 2019/20:177309 2020/21:2061 2021/22:156321 "
+        "2022/23:145833 2023/24:12945 2024/25:76358 2025/26:11980"
+    ),
+    "zophar": _past(
+        "2009/10:4142 2010/11:17 2011/12:7627 2012/13:1792 2013/14:3749 2014/15:1951 "
+        "2015/16:3229 2016/17:30179 2017/18:16075 2018/19:25294 2019/20:52916 "
+        "2020/21:15625 2021/22:14668 2022/23:78749 2023/24:6799 2024/25:284767 "
+        "2025/26:140701"
+    ),
+    "lateriser": _past(
+        "2008/09:632836 2009/10:2084714 2010/11:2403966 2011/12:132668 2012/13:189 "
+        "2013/14:2212 2015/16:77 2016/17:49211 2017/18:8621 2018/19:12202 2019/20:30 "
+        "2020/21:678991 2021/22:1047 2022/23:117524 2023/24:173729 2024/25:435772 "
+        "2025/26:835102"
+    ),
+    "gianni-buttice": _past(
+        "2009/10:135956 2010/11:342944 2011/12:46453 2012/13:15283 2013/14:68213 "
+        "2014/15:18795 2015/16:57186 2016/17:20793 2017/18:20774 2018/19:385976 "
+        "2019/20:25622 2020/21:393344 2021/22:16235 2022/23:84832 2023/24:47328 "
+        "2024/25:560294 2025/26:142459"
+    ),
+    "fpl-heisenberg": _past(
+        "2013/14:202551 2014/15:20643 2015/16:31659 2016/17:9239 2017/18:836 "
+        "2018/19:18760 2019/20:25529 2020/21:7619 2021/22:105292 2022/23:112819 "
+        "2023/24:180809 2024/25:358569 2025/26:40323"
+    ),
+    "fpl-family": _past(
+        "2007/08:60606 2008/09:1732 2009/10:4439 2010/11:83121 2011/12:8036 "
+        "2012/13:3510 2013/14:24822 2014/15:11993 2015/16:70717 2016/17:73956 "
+        "2017/18:204457 2018/19:68818 2019/20:66286 2020/21:69166 2021/22:115082 "
+        "2022/23:48301 2023/24:83883 2024/25:119594 2025/26:183491"
+    ),
+    "fpl-salah": _past(
+        "2007/08:221345 2008/09:36391 2009/10:604 2010/11:952 2011/12:47454 "
+        "2012/13:20509 2013/14:11877 2014/15:859 2015/16:29602 2016/17:138935 "
+        "2017/18:12302 2018/19:709 2019/20:19682 2020/21:4991 2021/22:3231 "
+        "2022/23:103038 2023/24:48272 2024/25:70089 2025/26:425078"
+    ),
+    "fpl-hints": _past(
+        "2007/08:754930 2010/11:82141 2011/12:110 2012/13:5038 2013/14:34913 "
+        "2014/15:37515 2015/16:261424 2016/17:43184 2017/18:67977 2018/19:604565 "
+        "2019/20:284540 2020/21:4918 2021/22:4759 2022/23:113326 2023/24:622907 "
+        "2024/25:482412 2025/26:196475"
+    ),
+    "fpl-matthew": _past(
+        "2009/10:15535 2010/11:434 2011/12:9076 2012/13:436 2013/14:1032 2014/15:1565 "
+        "2015/16:5272 2016/17:367 2017/18:11009 2018/19:9864 2019/20:71107 "
+        "2020/21:29128 2021/22:23021 2022/23:58817 2023/24:181584 2024/25:13608 "
+        "2025/26:19166"
+    ),
+    "big-man-bakar": _past(
+        "2010/11:363660 2011/12:71500 2012/13:20351 2013/14:93165 2014/15:4 "
+        "2015/16:176402 2016/17:1157 2017/18:101917 2018/19:66896 2019/20:68757 "
+        "2020/21:111827 2021/22:3735 2022/23:37086 2023/24:14594 2024/25:33564 "
+        "2025/26:839"
+    ),
+    "planet-fpl": _past(
+        "2014/15:504436 2015/16:335222 2016/17:21479 2017/18:197611 2018/19:164873 "
+        "2019/20:149826 2020/21:343289 2021/22:82927 2022/23:224364 2023/24:113903 "
+        "2024/25:51340 2025/26:32962"
+    ),
+    "fpltips": _past(
+        "2013/14:69644 2014/15:7498 2015/16:5076 2016/17:1881 2017/18:28103 "
+        "2018/19:68706 2019/20:75570 2020/21:5895 2021/22:92680 2022/23:61691 "
+        "2023/24:68475 2024/25:3834 2025/26:7242"
+    ),
+}
+
 
 _HARRY_SELF_CLAIMS = [
     ClaimedFinish(
@@ -225,9 +378,11 @@ REGISTRY: list[Creator] = [
         channel_title="Let's Talk FPL",
         subscriber_count=501_000,
         real_name="Andy Mears",
-        verification=Verification.SELF_CLAIMED,
+        fpl_team_id=41,
+        verification=Verification.API,
         self_claimed_finishes=_ANDY_SELF_CLAIMS,
-        weight=weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=_ANDY_SELF_CLAIMS),
+        past_finishes=_API_HISTORY["lets-talk-fpl"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["lets-talk-fpl"]),
         notes=(
             "Real name Andy Mears — corroborated by 3 independent sources (a podcast interview "
             "title, his solo.to link page, and his personal YouTube handle @andymears501). No "
@@ -247,10 +402,12 @@ REGISTRY: list[Creator] = [
         channel_id="UCcPWnCj5AKC19HaySZjb25g",
         channel_title="FPL Harry",
         subscriber_count=233_000,
-        real_name=None,
-        verification=Verification.SELF_CLAIMED,
+        real_name="Harry Daniels",
+        fpl_team_id=3054,
+        verification=Verification.API,
         self_claimed_finishes=_HARRY_SELF_CLAIMS,
-        weight=weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=_HARRY_SELF_CLAIMS),
+        past_finishes=_API_HISTORY["fpl-harry"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-harry"]),
         notes=(
             "Promoted UNVERIFIED -> SELF_CLAIMED by the harvest sweep (owner-approved "
             "2026-08-19); his own season-review video claims five consecutive top-10k "
@@ -279,9 +436,11 @@ REGISTRY: list[Creator] = [
         channel_title="FPL Raptor",
         subscriber_count=178_000,
         real_name="Ross Dowsett",
-        verification=Verification.SELF_CLAIMED,
+        fpl_team_id=199,
+        verification=Verification.API,
         self_claimed_finishes=_RAPTOR_SELF_CLAIMS,
-        weight=weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=_RAPTOR_SELF_CLAIMS),
+        past_finishes=_API_HISTORY["fpl-raptor"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-raptor"]),
         notes=(
             "Real name Ross Dowsett, confirmed independently (his own X account @ross_dowsett, "
             "a 2021 FFS interview, a Fantasy Football Fix contributor bio). No FPL ID found "
@@ -300,9 +459,11 @@ REGISTRY: list[Creator] = [
         channel_title="The FPL Wire - Fantasy Premier League",
         subscriber_count=44_000,
         real_name="Prasun Singhal",
-        verification=Verification.DOCUMENTED,
+        fpl_team_id=3315,
+        verification=Verification.API,
         documented_finishes=_PRAS_CLAIMS,
-        weight=weight_for(Verification.DOCUMENTED, documented_finishes=_PRAS_CLAIMS),
+        past_finishes=_API_HISTORY["pras"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["pras"]),
         channel_primary=True,
         notes=(
             "Real name Prasun Singhal, well corroborated (FFS 'Meet the Manager' feature, an "
@@ -319,13 +480,15 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-mate",
         name="FPL Mate",
         youtube_hint="FPL Mate",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCweDAlFm2LnVcOqaFU4_AGA",
         channel_title="FPL Mate",
         subscriber_count=256_000,
         real_name="Dan (surname unconfirmed)",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        fpl_team_id=120,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpl-mate"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-mate"]),
         notes=(
             "First name 'Dan' confirmed (his own channel's business-inquiry email is "
             "dan@fplmate.co.uk, consistent across his socials). Surname 'Bradley' appears on "
@@ -345,9 +508,11 @@ REGISTRY: list[Creator] = [
         channel_title="FPL Focal",
         subscriber_count=253_000,
         real_name="Oscar (surname not publicly disclosed)",
-        verification=Verification.DOCUMENTED,
+        fpl_team_id=298,
+        verification=Verification.API,
         documented_finishes=_FOCAL_CLAIMS,
-        weight=weight_for(Verification.DOCUMENTED, documented_finishes=_FOCAL_CLAIMS),
+        past_finishes=_API_HISTORY["fpl-focal"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-focal"]),
         notes=(
             "Only a first name is publicly disclosed — he appears to run a deliberately "
             "faceless/surname-anonymous brand (his talent agency's bio page was unreachable). "
@@ -364,9 +529,11 @@ REGISTRY: list[Creator] = [
         channel_title="Holly Shand FPL",
         subscriber_count=41_200,
         real_name="Holly Shand",
-        verification=Verification.DOCUMENTED,
+        fpl_team_id=70063,
+        verification=Verification.API,
         documented_finishes=_HOLLY_CLAIMS,
-        weight=weight_for(Verification.DOCUMENTED, documented_finishes=_HOLLY_CLAIMS),
+        past_finishes=_API_HISTORY["holly-shand"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["holly-shand"]),
         notes=(
             "Real/public name confirmed consistent across Premier League, Sky Sports News, "
             "The Athletic, LinkedIn, and BBC. No FPL ID found — the one previously-rejected "
@@ -378,13 +545,15 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-blackbox",
         name="FPL BlackBox (Mark Sutherns)",
         youtube_hint="FPL BlackBox",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCGJ8-xqhOLwyJNuPMsVoQWQ",
         channel_title="FPL BlackBox",
         subscriber_count=37_900,
         real_name="Mark Sutherns",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        fpl_team_id=252,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpl-blackbox"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-blackbox"]),
         notes=(
             "Real name Mark Sutherns solidly confirmed (Companies House officer record 'Mark "
             "John Sutherns' as a founding FFS director, LinkedIn, FFS's own site naming him as "
@@ -402,14 +571,16 @@ REGISTRY: list[Creator] = [
         creator_id="zophar",
         name="Zophar",
         youtube_hint="Zophar FPL",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCtIPFexB6PLKNNl0XH3SKKw",
         channel_title="The FPL Wire - Fantasy Premier League",
         subscriber_count=44_000,
         channel_match_flagged=False,
         real_name="Utkarsh Dalmia",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        fpl_team_id=2177,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["zophar"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["zophar"]),
         notes=(
             "Shares The FPL Wire's channel with Pras and Lateriser (co-hosts) — the resolver's "
             "fuzzy-match flag on this is a false positive, overridden here since it's a known, "
@@ -430,14 +601,16 @@ REGISTRY: list[Creator] = [
         creator_id="lateriser",
         name="Lateriser",
         youtube_hint="Lateriser FPL",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCtIPFexB6PLKNNl0XH3SKKw",
         channel_title="The FPL Wire - Fantasy Premier League",
         subscriber_count=44_000,
         channel_match_flagged=False,
         real_name="Pranil Sheth",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        fpl_team_id=6816,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["lateriser"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["lateriser"]),
         notes=(
             "Shares The FPL Wire's channel (see Zophar's note on the false-positive flag "
             "override). Real name Pranil Sheth — this resolves an ambiguity from the prior "
@@ -466,9 +639,11 @@ REGISTRY: list[Creator] = [
         channel_title="Gianni Butticè FPL",
         subscriber_count=46_200,
         real_name="Gianni Buttice",
-        verification=Verification.DOCUMENTED,
+        fpl_team_id=2375,
+        verification=Verification.API,
         documented_finishes=_GIANNI_CLAIMS,
-        weight=weight_for(Verification.DOCUMENTED, documented_finishes=_GIANNI_CLAIMS),
+        past_finishes=_API_HISTORY["gianni-buttice"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["gianni-buttice"]),
         notes=(
             "Treating 'Gianni Buttice' as his real name at medium-high confidence — it's used "
             "consistently as his published-author identity (his book 'FPL Diary') and on "
@@ -489,9 +664,11 @@ REGISTRY: list[Creator] = [
         channel_title="FPL Heisenberg",
         subscriber_count=227,
         real_name="Wes Prickett",
-        verification=Verification.DOCUMENTED,
+        fpl_team_id=16070,
+        verification=Verification.API,
         documented_finishes=_HEISENBERG_CLAIMS,
-        weight=weight_for(Verification.DOCUMENTED, documented_finishes=_HEISENBERG_CLAIMS),
+        past_finishes=_API_HISTORY["fpl-heisenberg"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-heisenberg"]),
         notes=(
             "Real name Wes Prickett confirmed (LinkedIn, BBC). Small personal channel (227 "
             "subs) despite the reputation — likely better known via BBC/Patreon appearances "
@@ -504,15 +681,17 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-family",
         name="FPL Family",
         youtube_hint="FPL Family",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCDG_EqOaaO1SSxEMZwfrSkg",
         channel_title="FPL Family",
         subscriber_count=28_800,
-        real_name="Sam Bonfield",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        real_name="Lee Bonfield",
+        fpl_team_id=2913,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpl-family"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-family"]),
         notes=(
-            "Not deep-verified this pass — tier 2 by design (sentiment/diversity pick), so "
+            "DUO — the weight is LEE Bonfield's verified history (entry 2913), not the channel's combined output. Sam's own entry (2977) was checked and is weaker (0.198 vs Lee's 0.264); the better of the two was taken, per the owner. Picks spoken by Sam therefore carry Lee's weight — a known approximation. Not deep-verified this pass — tier 2 by design (sentiment/diversity pick), so "
             "default weight applies regardless of verification status. real_name is one half "
             "of the Lee & Sam duo: FFS's own Pro Pundits page independently names 'Sam "
             "Bonfield' as 'One half of FPL Family team', consistent with earlier research "
@@ -523,14 +702,16 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-salah",
         name="FPL Salah",
         youtube_hint="FPL Salah",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id=_FFH_CHANNEL_ID,
         channel_title="Fantasy Football Hub (shared — see notes)",
         subscriber_count=109_000,
         channel_match_flagged=True,
-        real_name=None,
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        real_name="Abdul Rehman",
+        fpl_team_id=70,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpl-salah"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-salah"]),
         title_filter="FPL Salah",
         notes=_FFH_SHARED_NOTE
         + " Possibly 'Abdul Rehman' per an X bio, but not independently confirmed — left "
@@ -542,25 +723,29 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-hints",
         name="FPL Hints",
         youtube_hint="FPL Hints",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCRaakOLYqsR9VcpylmmfuJQ",
         channel_title="FPL Hints",
         subscriber_count=2_400,
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        fpl_team_id=405,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpl-hints"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-hints"]),
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
     Creator(
         creator_id="fpl-matthew",
         name="FPL Matthew",
         youtube_hint="FPL Matthew",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id=_FFH_CHANNEL_ID,
         channel_title="Fantasy Football Hub (shared — see notes)",
         subscriber_count=109_000,
         channel_match_flagged=True,
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        fpl_team_id=18124,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpl-matthew"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpl-matthew"]),
         title_filter="FPL Matthew",
         notes=_FFH_SHARED_NOTE
         + " (A plain search hint for 'FPL Matthew' also false-positive-matches 'FPL Mate' — "
@@ -572,14 +757,16 @@ REGISTRY: list[Creator] = [
         creator_id="big-man-bakar",
         name="Big Man Bakar",
         youtube_hint="Big Man Bakar FPL",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id=_FFH_CHANNEL_ID,
         channel_title="Fantasy Football Hub (shared — see notes)",
         subscriber_count=109_000,
         channel_match_flagged=True,
         real_name="AbuBakar Siddiq (per X/Instagram bios)",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        fpl_team_id=5133,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["big-man-bakar"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["big-man-bakar"]),
         title_filter="Bakar",
         notes=_FFH_SHARED_NOTE
         + " Self-reports 'former FPL world #4' across socials — an extraordinary claim with "
@@ -598,30 +785,35 @@ REGISTRY: list[Creator] = [
         subscriber_count=39_600,
         verification=Verification.UNVERIFIED,
         weight=weight_for(Verification.UNVERIFIED),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
     Creator(
         creator_id="planet-fpl",
         name="Planet FPL (Suj & James)",
         youtube_hint="Planet FPL",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UC8043oOKTB4uP8Nq15Kz6bg",
         channel_title="Planet FPL",
         subscriber_count=23_300,
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        real_name="James Linden",
+        fpl_team_id=1194,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["planet-fpl"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["planet-fpl"]),
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
     Creator(
         creator_id="fpltips",
         name="FPLtips",
         youtube_hint="FPLtips",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UCVPb_jLxwaoYd-Dm7aSWQKQ",
         channel_title="FPLtips",
         subscriber_count=220_000,
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
-        notes="Not deep-verified — tier 2 by design, default weight applies.",
+        fpl_team_id=1527,
+        verification=Verification.API,
+        past_finishes=_API_HISTORY["fpltips"],
+        weight=weight_for(Verification.API, past_finishes=_API_HISTORY["fpltips"]),
+        notes="Seeded as a tier-2 diversity pick; now API-verified (see fpl_team_id) and weighted on real history like everyone else.",
     ),
 ]

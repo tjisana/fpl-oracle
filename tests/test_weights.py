@@ -59,13 +59,29 @@ class TestComputeWeight:
         ]
         assert compute_weight(finishes) == pytest.approx(0.7669172932330828)
 
-    def test_none_rank_scores_zero(self) -> None:
-        finishes = [PastFinish(season_name="2023/24", rank=None)]
-        assert compute_weight(finishes) == pytest.approx(0.0)
+    def test_history_of_only_unranked_seasons_is_no_evidence(self) -> None:
+        # BEHAVIOUR CHANGE (2026-08-19): an unranked season means "did not
+        # play", not "finished last". A history with nothing but unranked
+        # seasons carries no evidence, so it falls back to the default
+        # rather than scoring a catastrophic 0.0.
+        assert compute_weight([PastFinish(season_name="2023/24", rank=None)]) == pytest.approx(
+            DEFAULT_TIER2_WEIGHT
+        )
+        assert compute_weight([PastFinish(season_name="2023/24", rank=0)]) == pytest.approx(
+            DEFAULT_TIER2_WEIGHT
+        )
 
-    def test_rank_below_one_scores_zero(self) -> None:
-        finishes = [PastFinish(season_name="2023/24", rank=0)]
-        assert compute_weight(finishes) == pytest.approx(0.0)
+    def test_unranked_season_is_skipped_not_scored(self) -> None:
+        # The load-bearing case: a real creator who sat one season out must
+        # not be punished for it. The live API returns rank 0 for exactly
+        # this (FPL Focal, 2022/23), and scoring it would have run a
+        # worst-possible finish into his recency window.
+        played = [
+            PastFinish(season_name="2025/26", rank=1000),
+            PastFinish(season_name="2024/25", rank=2000),
+        ]
+        with_gap = [*played, PastFinish(season_name="2023/24", rank=None)]
+        assert compute_weight(with_gap) == pytest.approx(compute_weight(played))
 
     def test_rank_one_scores_maximum(self) -> None:
         finishes = [PastFinish(season_name="2023/24", rank=1)]
