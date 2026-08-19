@@ -181,9 +181,9 @@ class TestConstraintsActuallyBind:
 
         by_id = {p.player_id: p for p in pool}
         xi = _C(by_id[p.player_id].position for p in squad.starting_xi)
-        assert (
-            xi[Position.GK] == 1
-        ), f"XI fields {xi[Position.GK]} goalkeepers — FPL allows exactly 1"
+        assert xi[Position.GK] == 1, (
+            f"XI fields {xi[Position.GK]} goalkeepers — FPL allows exactly 1"
+        )
 
 
 class TestBuildSquad:
