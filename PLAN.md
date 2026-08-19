@@ -73,7 +73,14 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       retry-on-ValidationError loop (max 2) with error feedback. Reviewed, fixes
       verified, merged. On the first real batch run: verify cache_read_input_tokens > 0
       (system prompt sits just above the 512-token cache minimum).
-- [ ] Run across all available "My GW1 Team" videos; review match quality
+- [ ] Run across all available "My GW1 Team" videos; review match quality —
+      RUNNER MERGED (reviewed + verified): `extract/run_extract.py` — per creator:
+      GW1-title-matched video (gw1X false-stem guard, Shorts filter, shared-channel
+      attribution), extract, resolve every pick (MATCHED → player_id stamped;
+      UNMATCHED/AMBIGUOUS kept-but-flagged with candidates, never fabricated).
+      Per-creator failures non-fatal incl. anthropic.APIError; report flushed in
+      finally. Outputs data/extractions/{video_id}.json + match_quality.md.
+      REMAINING: the live run + HUMAN review of match_quality.md.
 - [ ] SELF_CLAIMED harvest sweep — INFRASTRUCTURE MERGED (reviewed + verified):
       `roster/harvest.py` (season-review title matcher, 200-deep/May-1-cutoff uploads
       paging, transcript fetch via existing ingest machinery, manifest),
