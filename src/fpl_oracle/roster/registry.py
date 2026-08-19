@@ -24,8 +24,9 @@ alongside it for the narrower case of a creator's own on-record claim
 about their past ranks (their own video/screenshot, no third party) —
 admissible only when specific, and weighted with a steeper discount than
 DOCUMENTED for the obvious self-report selection bias (see
-`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 1 (Andy,
-see below) as SELF_CLAIMED — all 6 at `Tier.CORE`; the other 14 are
+`roster/weights.py`). Of the 20, 5 qualify as DOCUMENTED and 2 (Andy and
+FPL Raptor, the latter promoted 2026-08-19 by the owner-approved harvest
+sweep) as SELF_CLAIMED — all 7 at `Tier.CORE`; the other 13 are
 `Tier.SECONDARY` at the default weight. But **0 of 20 still have an
 API-verified ID** — every fresh candidate this pass also failed live
 verification, in a few cases because a years-old article's entry ID has
@@ -68,6 +69,23 @@ from fpl_oracle.roster.weights import weight_for
 _BBC_FPL_EXPERTS = "https://feeds.bbci.co.uk/sport/articles/c4gj7pl3p82o"
 _FFS_PRO_PUNDITS = "https://www.fantasyfootballscout.co.uk/the-ffs-pro-pundits"
 _ANDY_SEASON_REVIEW = "https://www.youtube.com/watch?v=UW85Hel20QE"
+_RAPTOR_SEASON_GUIDE = "https://www.youtube.com/watch?v=c1MyHESd5pA&t=111"
+
+_RAPTOR_SELF_CLAIMS = [
+    ClaimedFinish(
+        description="four consecutive top-35k finishes (the four seasons preceding 2025/26), "
+        "stated in his own end-of-season video at 1:51 — exact phrase: 'the previous four "
+        "seasons, as you can see above my head, i finished inside the top 35k'. Quote "
+        "verified as an exact substring of the stored transcript by the harvest sweep "
+        "(roster.claim_verify). INTERPRETATION CAVEAT the tier doesn't price in: he is "
+        "reading off an on-screen graphic, so the transcript corroborates that he SAID it, "
+        "not the ranks displayed; and 'inside the top 35k' is a band, so 35,000 is the "
+        "conservative representative value, not an exact rank.",
+        rank=35_000,
+        source_url=_RAPTOR_SEASON_GUIDE,
+        count=4,
+    ),
+]
 
 _ANDY_SELF_CLAIMS = [
     ClaimedFinish(
@@ -223,18 +241,21 @@ REGISTRY: list[Creator] = [
         creator_id="fpl-raptor",
         name="FPL Raptor",
         youtube_hint="FPL Raptor",
-        tier=Tier.SECONDARY,
+        tier=Tier.CORE,
         channel_id="UC54QLWzsMifTRjNQ02z5pCw",
         channel_title="FPL Raptor",
         subscriber_count=178_000,
         real_name="Ross Dowsett",
-        verification=Verification.UNVERIFIED,
-        weight=weight_for(Verification.UNVERIFIED),
+        verification=Verification.SELF_CLAIMED,
+        self_claimed_finishes=_RAPTOR_SELF_CLAIMS,
+        weight=weight_for(Verification.SELF_CLAIMED, self_claimed_finishes=_RAPTOR_SELF_CLAIMS),
         notes=(
             "Real name Ross Dowsett, confirmed independently (his own X account @ross_dowsett, "
             "a 2021 FFS interview, a Fantasy Football Fix contributor bio). No FPL ID found "
             "under that name; the two previously-rejected candidates (18675 = a spam account, "
-            "746 = unrelated manager 'A. Almarzooqi') remain correctly rejected."
+            "746 = unrelated manager 'A. Almarzooqi') remain correctly rejected. Promoted "
+            "UNVERIFIED -> SELF_CLAIMED by the harvest sweep (owner-approved 2026-08-19): his "
+            "own end-of-season video claims four straight top-35k finishes."
         ),
     ),
     Creator(
