@@ -440,6 +440,12 @@ class PlayerDB:
     def get(self, player_id: int) -> Player | None:
         return self._players.get(player_id)
 
+    def all_players(self) -> list[Player]:
+        """Every player in the DB, order-independent. For batch consumers
+        (e.g. the availability filter) that need the whole roster rather
+        than a single lookup — not used by the name resolver itself."""
+        return list(self._players.values())
+
     def __len__(self) -> int:
         return len(self._players)
 
