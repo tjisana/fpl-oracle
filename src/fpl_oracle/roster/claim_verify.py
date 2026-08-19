@@ -38,10 +38,15 @@ import re
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
-def _collapse_whitespace(text: str) -> str:
+def collapse_whitespace(text: str) -> str:
     """Collapse every run of whitespace — including newlines, since
     transcript segments are stored as separate lines and wrap
-    arbitrarily — to a single space, and strip the ends."""
+    arbitrarily — to a single space, and strip the ends.
+
+    Public because `claim_extract.locate_quote_timestamp` builds its
+    quote-position index with this exact normalization: its
+    "verifies implies locates" invariant depends on this function
+    staying in lockstep with `quote_in_transcript`."""
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
@@ -58,7 +63,7 @@ def quote_in_transcript(quote: str, transcript_text: str) -> bool:
     emptiness would silently defeat the whole check rather than
     genuinely anchoring a claim.
     """
-    collapsed_quote = _collapse_whitespace(quote).casefold()
+    collapsed_quote = collapse_whitespace(quote).casefold()
     if not collapsed_quote:
         return False
-    return collapsed_quote in _collapse_whitespace(transcript_text).casefold()
+    return collapsed_quote in collapse_whitespace(transcript_text).casefold()

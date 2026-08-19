@@ -82,6 +82,7 @@ def test_timestamp_derived_mechanically_not_trusted(monkeypatch):
     _fake_client(monkeypatch, [_response(_WireClaims(claims=[_wire_claim()]))])
     (candidate,) = extract_rank_claims(
         creator_id="lets-talk-fpl",
+        creator_name="Andy",
         video_id="vid123",
         video_title="SEASON REVIEW",
         transcript=_transcript(),
@@ -99,6 +100,7 @@ def test_unlocatable_quote_falls_back_to_hint(monkeypatch):
     _fake_client(monkeypatch, [_response(_WireClaims(claims=[claim]))])
     (candidate,) = extract_rank_claims(
         creator_id="c",
+        creator_name="C",
         video_id="vid123",
         video_title="T",
         transcript=_transcript(),
@@ -111,7 +113,13 @@ def test_unlocatable_quote_falls_back_to_hint(monkeypatch):
 def test_empty_claims_is_valid(monkeypatch):
     _fake_client(monkeypatch, [_response(_WireClaims(claims=[]))])
     assert (
-        extract_rank_claims(creator_id="c", video_id="v", video_title="T", transcript=_transcript())
+        extract_rank_claims(
+            creator_id="c",
+            creator_name="C",
+            video_id="v",
+            video_title="T",
+            transcript=_transcript(),
+        )
         == []
     )
 
@@ -122,10 +130,148 @@ def test_parse_call_raising_reports_as_truncation(monkeypatch):
 
     _fake_client(monkeypatch, [_raise])
     with pytest.raises(ClaimExtractionError, match="likely truncated"):
-        extract_rank_claims(creator_id="c", video_id="v", video_title="T", transcript=_transcript())
+        extract_rank_claims(
+            creator_id="c",
+            creator_name="C",
+            video_id="v",
+            video_title="T",
+            transcript=_transcript(),
+        )
 
 
 def test_refusal_raises(monkeypatch):
     _fake_client(monkeypatch, [_response(None, stop_reason="refusal")])
     with pytest.raises(ClaimExtractionError, match="refused"):
-        extract_rank_claims(creator_id="c", video_id="v", video_title="T", transcript=_transcript())
+        extract_rank_claims(
+            creator_id="c",
+            creator_name="C",
+            video_id="v",
+            video_title="T",
+            transcript=_transcript(),
+        )
+
+
+def test_user_message_carries_creator_context_and_cached_system(monkeypatch):
+    calls = _fake_client(monkeypatch, [_response(_WireClaims(claims=[]))])
+    extract_rank_claims(
+        creator_id="pras",
+        creator_name="Pras",
+        video_id="vid123",
+        video_title="SEASON REVIEW POD",
+        transcript=_transcript(),
+        channel_context="joint show with co-hosts",
+    )
+    call = calls[0]
+    content = call["messages"][0]["content"]
+    assert "Creator (the ONLY person whose claims count): Pras" in content
+    assert "Channel context: joint show with co-hosts" in content
+    assert "[4s] so this season i finished" in content  # rendered transcript reaches the model
+    (system_block,) = call["system"]
+    assert system_block["cache_control"] == {"type": "ephemeral"}
+    assert call["model"] == "claude-opus-5"
+    assert call["max_tokens"] == 16_000
+
+
+def test_max_tokens_and_no_output_branches(monkeypatch):
+    _fake_client(monkeypatch, [_response(None, stop_reason="max_tokens")])
+    with pytest.raises(ClaimExtractionError, match="truncated"):
+        extract_rank_claims(
+            creator_id="c",
+            creator_name="C",
+            video_id="v",
+            video_title="T",
+            transcript=_transcript(),
+        )
+
+    _fake_client(monkeypatch, [_response(None)])
+    with pytest.raises(ClaimExtractionError, match="no parseable"):
+        extract_rank_claims(
+            creator_id="c",
+            creator_name="C",
+            video_id="v",
+            video_title="T",
+            transcript=_transcript(),
+        )
+
+
+class TestRunClaimExtraction:
+    def _manifest(self, tmp_path, entries):
+        import json
+
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps(entries))
+        return path
+
+    def _entries(self):
+        return [
+            {
+                "creator_id": "lets-talk-fpl",
+                "video_id": "vid123",
+                "title": "SEASON REVIEW",
+                "published_at": "2026-06-01T00:00:00+00:00",
+                "transcript_available": True,
+            },
+            {
+                "creator_id": "fpl-focal",
+                "video_id": "vid999",
+                "title": "ANOTHER REVIEW",
+                "published_at": None,
+                "transcript_available": True,
+            },
+        ]
+
+    def test_failure_continues_and_is_listed(self, monkeypatch, tmp_path):
+        from fpl_oracle.roster import claim_extract as ce
+
+        monkeypatch.setattr(ce, "fetch_transcript", lambda vid: _transcript())
+
+        def fake_extract(**kwargs):
+            if kwargs["video_id"] == "vid999":
+                raise ClaimExtractionError("model refused claim extraction for video vid999")
+            return [
+                # reuse the real construction path via the wire claim
+            ]
+
+        monkeypatch.setattr(ce, "extract_rank_claims", fake_extract)
+        review_path = tmp_path / "claims_review.md"
+        monkeypatch.setattr(
+            ce,
+            "write_claims_review",
+            lambda cands, creator_names=None: (
+                review_path.write_text("# review\n"),
+                review_path,
+            )[1],
+        )
+
+        result = ce.run_claim_extraction(manifest_path=self._manifest(tmp_path, self._entries()))
+
+        assert result == review_path
+        text = review_path.read_text()
+        assert "FAILED extractions" in text
+        assert "vid999" in text
+
+    def test_unknown_creator_id_fails_loudly(self, tmp_path):
+        from fpl_oracle.roster import claim_extract as ce
+
+        with pytest.raises(ValueError, match="not in the harvest manifest"):
+            ce.run_claim_extraction(
+                manifest_path=self._manifest(tmp_path, self._entries()),
+                creator_ids=["definitely-a-typo"],
+            )
+
+    def test_vanished_transcript_is_skipped_and_listed(self, monkeypatch, tmp_path):
+        from fpl_oracle.roster import claim_extract as ce
+
+        monkeypatch.setattr(ce, "fetch_transcript", lambda vid: None)
+        review_path = tmp_path / "claims_review.md"
+        monkeypatch.setattr(
+            ce,
+            "write_claims_review",
+            lambda cands, creator_names=None: (
+                review_path.write_text("# review\n"),
+                review_path,
+            )[1],
+        )
+        ce.run_claim_extraction(manifest_path=self._manifest(tmp_path, self._entries()))
+        text = review_path.read_text()
+        assert "transcript vanished" in text

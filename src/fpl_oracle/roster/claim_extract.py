@@ -16,7 +16,13 @@ fail verification (the owner still needs somewhere to look).
 Nothing here writes to `roster/registry.py` or any trust-model data:
 the output is `RankClaimCandidate`s, verified and rendered into
 `data/harvest/claims_review.md` for OWNER APPROVAL — per PLAN.md, no
-claim enters the trust model without it.
+claim enters the trust model without it. (The registry is imported
+READ-ONLY, for creator display names and shared-channel context.)
+
+Cache note: the system prompt sits near claude-opus-5's 512-token
+cacheable minimum. On the first real sweep, verify
+`usage.cache_read_input_tokens > 0` across consecutive videos before
+assuming the cache saving.
 """
 
 from __future__ import annotations
@@ -31,18 +37,24 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript
-from fpl_oracle.roster.claim_verify import _collapse_whitespace
+from fpl_oracle.roster.claim_verify import collapse_whitespace
 from fpl_oracle.roster.claims import (
     RankClaimCandidate,
     verify_candidates,
     write_claims_review,
 )
 from fpl_oracle.roster.harvest import DEFAULT_MANIFEST_PATH
+from fpl_oracle.roster.registry import REGISTRY
 
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-opus-5"
-MAX_TOKENS = 8_000
+# Hard cap on thinking + output together (thinking is ON by default on
+# claude-opus-5). The claims JSON is tiny, but a 30-40 minute transcript
+# can draw thousands of thinking tokens; headroom is free and truncation
+# is a hard error. Levers if it ever bites: output_config effort
+# "medium", or streaming with a higher cap.
+MAX_TOKENS = 16_000
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "extract_rank_claims.txt").read_text()
 
@@ -101,7 +113,7 @@ def locate_quote_timestamp(quote: str, transcript: Transcript) -> int | None:
     collapse + casefold) so a quote that verifies always locates. Returns
     None when the quote isn't present (first occurrence wins otherwise).
     """
-    norm_quote = _collapse_whitespace(quote).casefold()
+    norm_quote = collapse_whitespace(quote).casefold()
     if not norm_quote:
         return None
 
@@ -111,7 +123,7 @@ def locate_quote_timestamp(quote: str, transcript: Transcript) -> int | None:
     parts: list[str] = []
     pos = 0
     for seg in transcript.segments:
-        norm_seg = _collapse_whitespace(seg.text).casefold()
+        norm_seg = collapse_whitespace(seg.text).casefold()
         if not norm_seg:
             continue
         offsets.append((pos, seg.start))
@@ -130,13 +142,35 @@ def locate_quote_timestamp(quote: str, transcript: Transcript) -> int | None:
     return int(start)
 
 
+def channel_context_for(creator_id: str) -> str | None:
+    """Shared-channel context line for the model, from the registry:
+    joint-show primaries and title-filtered personas both mean other
+    voices appear on the channel, so speaker attribution needs care."""
+    creator = next((c for c in REGISTRY if c.creator_id == creator_id), None)
+    if creator is None:
+        return None
+    if creator.channel_primary:
+        return (
+            "This channel hosts joint discussions with multiple regular "
+            "co-hosts; other voices than the named creator appear often."
+        )
+    if creator.title_filter:
+        return (
+            "This creator is one of several personas sharing one channel; "
+            "other people's videos and voices appear on it."
+        )
+    return None
+
+
 def extract_rank_claims(
     *,
     creator_id: str,
+    creator_name: str,
     video_id: str,
     video_title: str,
     transcript: Transcript,
     published_at: datetime | None = None,
+    channel_context: str | None = None,
 ) -> list[RankClaimCandidate]:
     """Extract rank-claim candidates from one season-review transcript.
     Quotes are verified downstream (`verify_candidates`); timestamps are
@@ -156,8 +190,10 @@ def extract_rank_claims(
                 {
                     "role": "user",
                     "content": (
+                        f"Creator (the ONLY person whose claims count): {creator_name}\n"
                         f"Video title: {video_title}\n"
                         + (f"Published: {published_at:%Y-%m-%d}\n" if published_at else "")
+                        + (f"Channel context: {channel_context}\n" if channel_context else "")
                         + f"Transcript:\n{render_timestamped_transcript(transcript)}"
                     ),
                 }
@@ -206,10 +242,22 @@ def run_claim_extraction(
 ) -> Path:
     """Extract claims for every transcript-bearing entry in the harvest
     manifest, verify quotes, and write the owner-review markdown. Returns
-    the review file path."""
+    the review file path.
+
+    Per-video extraction failures are non-fatal: they're logged, listed
+    in a FAILED section of the review file, and never discard the
+    candidates (and API spend) of videos that succeeded."""
     entries = json.loads(manifest_path.read_text())
+    known_ids = {e["creator_id"] for e in entries}
+    if creator_ids is not None:
+        unknown = sorted(set(creator_ids) - known_ids)
+        if unknown:
+            raise ValueError(f"creator id(s) not in the harvest manifest: {', '.join(unknown)}")
+
+    names = {c.creator_id: c.name for c in REGISTRY}
     all_candidates: list[RankClaimCandidate] = []
     transcripts: dict[str, Transcript] = {}
+    failures: list[tuple[str, str, str]] = []  # (creator_id, video_id, error)
 
     for entry in entries:
         if creator_ids is not None and entry["creator_id"] not in creator_ids:
@@ -219,18 +267,31 @@ def run_claim_extraction(
         transcript = fetch_transcript(entry["video_id"])  # cache-hit for harvested videos
         if transcript is None:
             logger.warning("transcript vanished for video %s — skipping", entry["video_id"])
+            failures.append((entry["creator_id"], entry["video_id"], "transcript vanished"))
             continue
         transcripts[entry["video_id"]] = transcript
         published_at = (
             datetime.fromisoformat(entry["published_at"]) if entry.get("published_at") else None
         )
-        candidates = extract_rank_claims(
-            creator_id=entry["creator_id"],
-            video_id=entry["video_id"],
-            video_title=entry["title"],
-            transcript=transcript,
-            published_at=published_at,
-        )
+        try:
+            candidates = extract_rank_claims(
+                creator_id=entry["creator_id"],
+                creator_name=names.get(entry["creator_id"], entry["creator_id"]),
+                video_id=entry["video_id"],
+                video_title=entry["title"],
+                transcript=transcript,
+                published_at=published_at,
+                channel_context=channel_context_for(entry["creator_id"]),
+            )
+        except ClaimExtractionError as e:
+            logger.warning(
+                "claims: %s — extraction FAILED for video %s: %s",
+                entry["creator_id"],
+                entry["video_id"],
+                e,
+            )
+            failures.append((entry["creator_id"], entry["video_id"], str(e)))
+            continue
         logger.info(
             "claims: %s — %d candidate(s) from %r",
             entry["creator_id"],
@@ -240,7 +301,17 @@ def run_claim_extraction(
         all_candidates.extend(candidates)
 
     verified = verify_candidates(all_candidates, transcripts)
-    return write_claims_review(verified)
+    path = write_claims_review(verified, creator_names=names)
+    if failures:
+        failed_lines = ["", "## FAILED extractions — review these videos manually", ""]
+        failed_lines += [
+            f"- {creator_id} — video `{video_id}`: {error}"
+            for creator_id, video_id, error in failures
+        ]
+        with path.open("a") as f:
+            f.write("\n".join(failed_lines) + "\n")
+        logger.warning("claims: %d video(s) failed extraction — listed in %s", len(failures), path)
+    return path
 
 
 def main(argv: list[str] | None = None) -> int:
