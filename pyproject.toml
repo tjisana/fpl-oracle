@@ -32,6 +32,12 @@ dev = [
 [tool.pytest.ini_options]
 markers = ["network: hits live external APIs"]
 addopts = "-q"
+filterwarnings = [
+    # PuLP deprecates PULP_CBC_CMD, but its replacement (COIN_CMD) needs a
+    # CBC binary that isn't reliably installable here — see
+    # solver.squad._solver for the full reasoning.
+    "ignore:PULP_CBC_CMD is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100
