@@ -78,9 +78,11 @@ _HARRY_SELF_CLAIMS = [
         "stated in his own season-review video at 4:19 — exact phrase: 'i finished in the top "
         "10k every single season for the past five years before this one'. Quote verified as an "
         "exact substring of the stored transcript by the harvest sweep (roster.claim_verify). "
-        "Independently corroborated: the Phase 1 research pass separately recorded him "
-        "self-reporting 'seven top-15k, five consecutive top-10k' — two independent sources, "
-        "same five-season claim.",
+        "CONSISTENCY (not corroboration): the Phase 1 research pass separately recorded him "
+        "self-reporting 'seven top-15k, five consecutive top-10k' elsewhere. Both trace back "
+        "to Harry himself, so this is the same self-report restated in two places, NOT "
+        "third-party verification — it shows he has not inflated the number recently, and "
+        "nothing more. No third party has attributed any finish to him.",
         rank=10_000,
         source_url=_HARRY_SEASON_REVIEW,
         count=5,
