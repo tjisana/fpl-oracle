@@ -74,10 +74,15 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       `roster/claim_verify.py` (mechanical casefolded exact-substring quote check),
       `roster/claims.py` (RankClaimCandidate + owner-review markdown with approve
       checkboxes + timestamped links). Also landed: min-duration Shorts filter in
-      ingest (180s, non-fatal on API failure) — the Phase 1 carry-over. REMAINING:
-      the Claude rank-claim extraction call (main session owns the prompt), the full
-      20-creator live sweep, then OWNER APPROVAL of each claim. Original task spec
-      follows. (MUST land before the GW1 weight freeze, else
+      ingest (180s, non-fatal on API failure) — the Phase 1 carry-over. ALSO MERGED
+      (reviewed + verified): `roster/claim_extract.py` + prompt — the Claude
+      rank-claim extraction (timestamps DERIVED by locating the verified quote in
+      segments, model hint only as fallback; per-video failures non-fatal, listed in
+      a FAILED section; creator identity + shared-channel context passed to the
+      model). REMAINING (operational): the full 20-creator live sweep
+      (`uv run python -m fpl_oracle.roster.harvest` then
+      `uv run python -m fpl_oracle.roster.claim_extract`), then OWNER APPROVAL of
+      each claim in data/harvest/claims_review.md. Original task spec follows. (MUST land before the GW1 weight freeze, else
       it waits a year): for every creator, locate season-review / season-opener
       videos by title, fetch transcripts (existing `ingest/` machinery), have
       Claude extract rank claims (quote + timestamp), then OWNER APPROVES each
