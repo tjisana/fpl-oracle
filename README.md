@@ -74,8 +74,8 @@ Even if you don't care about football, these are the parts that generalise.
 
 ## Project status
 
-Built and tested toward the 2026/27 season opener. **297 tests**, CI green
-on every push (lint, format, type check, tests).
+Built and tested toward the 2026/27 season opener. **297 tests**; every push
+runs lint, format check, type check and the full suite in CI.
 
 | Stage | Module | State |
 |---|---|---|
