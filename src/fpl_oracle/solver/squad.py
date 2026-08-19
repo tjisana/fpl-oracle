@@ -110,10 +110,21 @@ class InfeasibleSquadError(RuntimeError):
     been relaxed away, so it always means a real feasibility problem."""
 
 
-def coefficient(player: Player, score: PlayerScore | None) -> float:
-    """Objective coefficient: price anchor plus bounded consensus lift."""
+def coefficient(
+    player: Player, score: PlayerScore | None, availability_multiplier: float = 1.0
+) -> float:
+    """Objective coefficient: price anchor plus bounded consensus lift,
+    scaled by availability.
+
+    `availability_multiplier` is the DOUBTFUL discount from
+    `fpl.availability` (a 75%-chance player carries 0.75). Applying it here
+    is what makes the skill's "doubtful players get capped/excluded" rule
+    real — excluded players never reach the pool, and doubtful ones reach
+    it worth proportionally less. Defaults to 1.0 so a caller with no
+    verdicts behaves exactly as before.
+    """
     band_score = score.band_score if score else 0.0
-    return player.price_m + CONSENSUS_WEIGHT * band_score
+    return (player.price_m + CONSENSUS_WEIGHT * band_score) * availability_multiplier
 
 
 def _solver() -> pulp.LpSolver:
@@ -169,16 +180,29 @@ def _solve(
     for position, maximum in XI_MAX.items():
         problem += pulp.lpSum(y[p.player_id] for p in players if p.position == position) <= maximum
 
-    # captaincy: the armband decision must not be stranded outside the squad
-    if required_options > 0 and captain_options:
+    # Captaincy: the armband decision must not be stranded outside the squad.
+    # Deliberately NOT guarded on `captain_options` being non-empty — an
+    # empty list with required_options>0 must go INFEASIBLE so build_squad
+    # takes the honest relaxation path, rather than skipping the constraint
+    # and then reporting a guarantee that was never enforced.
+    if required_options > 0:
         problem += pulp.lpSum(x[pid] for pid in captain_options if pid in x) >= required_options
 
     problem.solve(_solver())
-    if pulp.LpStatus[problem.status] != "Optimal":
+    status = pulp.LpStatus[problem.status]
+    if status == "Optimal":
+        pass
+    elif status == "Infeasible":
         return None
+    else:
+        # Unbounded / Undefined / "Not Solved" mean the SOLVER failed, not
+        # that the squad is impossible. Returning None here would send
+        # build_squad down the captaincy-relaxation ladder and end in a
+        # confidently wrong "no legal 15" at the deadline.
+        raise RuntimeError(f"solver returned status {status!r}, not a feasibility result")
     return (
-        {pid: int(round(var.value() or 0)) for pid, var in x.items()},
-        {pid: int(round(var.value() or 0)) for pid, var in y.items()},
+        {pid: round(var.value() or 0) for pid, var in x.items()},
+        {pid: round(var.value() or 0) for pid, var in y.items()},
     )
 
 
@@ -187,6 +211,7 @@ def build_squad(
     scores: dict[int, PlayerScore],
     captain_options: list[int],
     required_options: int,
+    availability_multipliers: dict[int, float] | None = None,
 ) -> Squad:
     """Pick the optimal 15 (and the XI within it).
 
@@ -200,8 +225,18 @@ def build_squad(
     """
     if not players:
         raise InfeasibleSquadError("empty player pool")
+    ids = [p.player_id for p in players]
+    if len(set(ids)) != len(ids):
+        # A duplicated id is structurally unselectable (the quota equalities
+        # count multiplicity while SQUAD_SIZE counts distinct variables), so
+        # it would silently distort the pool rather than fail.
+        raise ValueError("duplicate player_id in pool — dedupe before solving")
 
-    coefficients = {p.player_id: coefficient(p, scores.get(p.player_id)) for p in players}
+    multipliers = availability_multipliers or {}
+    coefficients = {
+        p.player_id: coefficient(p, scores.get(p.player_id), multipliers.get(p.player_id, 1.0))
+        for p in players
+    }
 
     relaxed = False
     solution = None

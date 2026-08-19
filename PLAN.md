@@ -128,14 +128,30 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       timestamp + link — never by rereading whole transcripts.
 
 ## Phase 3 — Consensus + solver (day 5)
-- [ ] `consensus/scoring.py`: weighted per-player scores from picks,
-      scored WITHIN price bands (see fpl-domain skill: weight classes)
-- [ ] `consensus/captaincy.py`: separate captaincy election from `captain` picks
-- [ ] `fpl/availability.py`: pre-solver filter on `status` /
-      `chance_of_playing_next_round` — facts veto, opinions vote
-- [ ] `solver/squad.py`: PuLP ILP — 15 players, £100m, 2/5/5/3, max 3/club,
-      plus: squad must include >=2 of top consensus captain options
-- [ ] First full squad output
+- [x] `consensus/scoring.py` — band-relative scores (position + £1m bucket),
+      strongest-vote-per-creator, saturating conviction, avoid as negative not veto,
+      no herding discount in v1 (reasoning recorded). Reviewed + merged.
+- [x] `consensus/captaincy.py` — separate election, 30% support floor, options drawn
+      from the post-availability pool, relative thin-evidence flag. Reviewed + merged.
+- [x] `fpl/availability.py` — facts veto: EXCLUDED is structural (not a threshold),
+      verdicts returned for ALL players so DOUBTFUL multipliers can be applied.
+      Reviewed + verified + merged.
+- [x] `solver/squad.py` — PuLP ILP, x (squad) + y (XI) variable sets so budget goes
+      to starters; price-anchored objective (price + 1.0*band_score); captaincy
+      constraint relaxes rather than failing. Review verified all rules by SOLVING
+      and confirmed consensus is NOT decorative: with it off, 7/15 squad members have
+      no creator support; with it on, 15/15 — 10 of 15 members change.
+- [x] First full squad output — produced 2026-08-19: £100.0m exactly, 3-4-3,
+      B.Fernandes (C) / Haaland (VC), XI £83.5m / bench £16.5m (minimum legal).
+- [ ] Single pipeline entry point + run log (see Auditing note below)
+
+### Auditing (gap found 2026-08-19)
+Provenance is strong — every squad player traces back through
+`data/extractions/{video_id}.json` (pick + resolution + candidates) to the stored
+transcript, and `PlayerScore.votes` retains which creator voted, with what weight,
+action and conviction. What's MISSING is a run record: nothing ties a shipped squad
+to the inputs and code version that produced it, and a re-run silently overwrites.
+Build before the deadline-morning rerun so that rerun is trustworthy.
 
 ## Phase 4 — Nuance + ship (days 6–7)
 - [ ] LLM nuance pass over solver output (flag concerns creators voiced)
