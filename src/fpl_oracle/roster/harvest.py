@@ -15,11 +15,12 @@ claim by hand before it can move a creator's weight.
 
 Run as:
 
-    uv run python -m fpl_oracle.roster.harvest [creator_id ...]
+    uv run python -m fpl_oracle.roster.harvest [--max-uploads N] [creator_id ...]
 
-With no arguments, sweeps every eligible creator in the registry. With
+With no creator_ids, sweeps every eligible creator in the registry. With
 one or more creator_ids, sweeps only those (still respecting
 shared-channel eligibility/attribution against the full registry).
+`--max-uploads` overrides `MAX_UPLOADS_PER_CHANNEL` (default 200).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -41,8 +43,14 @@ from fpl_oracle.roster.registry import REGISTRY
 
 # Season-review videos are typically posted 2-3 months after a season
 # ends, well past a channel's freshest handful of uploads by the time
-# this sweep runs — page deep enough to reliably reach them.
-MAX_UPLOADS_PER_CHANNEL = 75
+# this sweep runs — page deep enough to reliably reach them, including
+# for daily/near-daily uploaders where 75 uploads might only cover a
+# few weeks. A silent miss here is exactly the false negative PLAN.md
+# says costs a full year, so this errs generous; MAX_UPLOADS_PER_CHANNEL
+# combined with the `_season_review_window_start` early-stop cutoff
+# below (see `find_candidates_for_creator`) keeps the actual API cost
+# down for channels that don't upload daily.
+MAX_UPLOADS_PER_CHANNEL = 200
 
 DEFAULT_MANIFEST_PATH = Path("data/harvest/manifest.json")
 
@@ -96,6 +104,25 @@ def is_season_review_candidate(title: str) -> bool:
     return any(pattern.search(title) for pattern in SEASON_REVIEW_TITLE_PATTERNS)
 
 
+def _season_review_window_start(now: datetime | None = None) -> datetime:
+    """The earliest a season-review video is expected to land: May 1 of
+    `now`'s calendar year (season reviews land May-June; paging an
+    upload listing back past that is wasted API quota — see
+    `find_candidates_for_creator`).
+
+    KNOWN LIMITATION: this is a literal "May 1 of the current calendar
+    year" cutoff, not "May 1 of the season that just ended". Running the
+    sweep in Jan-Apr of the year AFTER a season ended (looking for last
+    May/June's review videos) would cut off too early, since `now.year`
+    would already be the following year. The sweep is expected to run in
+    its intended May-December window per PLAN.md's GW1-freeze deadline,
+    where this holds; flagged here in case it's ever run outside that
+    window.
+    """
+    now = now or datetime.now(UTC)
+    return datetime(now.year, 5, 1, tzinfo=UTC)
+
+
 class HarvestManifestEntry(BaseModel):
     creator_id: str
     video_id: str
@@ -110,7 +137,10 @@ def find_candidates_for_creator(
     max_uploads: int = MAX_UPLOADS_PER_CHANNEL,
 ) -> list[VideoInfo]:
     """List up to `max_uploads` of `creator`'s uploads (deep paging via
-    `youtube_client.list_uploads`, not just the freshest few), attribute
+    `youtube_client.list_uploads`, not just the freshest few — paging
+    stops early once a page's uploads predate
+    `_season_review_window_start`, so a channel with a long history
+    doesn't cost `max_uploads`-worth of API calls every run), attribute
     them per the shared-channel rule in
     `ingest.run_ingest.videos_for_creator` (a no-op for a sole-owned
     channel — reused as-is, not reimplemented, per the shared-channel
@@ -118,7 +148,11 @@ def find_candidates_for_creator(
     to season-review-style titles via `is_season_review_candidate`.
     """
     assert creator.channel_id is not None
-    videos = list_uploads(creator.channel_id, max_results=max_uploads)
+    videos = list_uploads(
+        creator.channel_id,
+        max_results=max_uploads,
+        stop_before=_season_review_window_start(),
+    )
     co_creators = [
         c
         for c in registry
@@ -209,17 +243,39 @@ def print_summary(entries: list[HarvestManifestEntry], registry: list[Creator] =
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
+    max_uploads = MAX_UPLOADS_PER_CHANNEL
+    creator_ids: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--max-uploads":
+            if i + 1 >= len(argv):
+                print("harvest: --max-uploads requires a value", file=sys.stderr)
+                return 1
+            try:
+                max_uploads = int(argv[i + 1])
+            except ValueError:
+                print(
+                    f"harvest: --max-uploads value must be an int, got {argv[i + 1]!r}",
+                    file=sys.stderr,
+                )
+                return 1
+            i += 2
+            continue
+        creator_ids.append(arg)
+        i += 1
+
     eligible = eligible_creators(REGISTRY)
-    if argv:
-        creators = [c for c in eligible if c.creator_id in argv]
-        missing = set(argv) - {c.creator_id for c in creators}
+    if creator_ids:
+        creators = [c for c in eligible if c.creator_id in creator_ids]
+        missing = set(creator_ids) - {c.creator_id for c in creators}
         if missing:
             print(f"harvest: unknown/ineligible creator_id(s): {sorted(missing)}", file=sys.stderr)
             return 1
     else:
         creators = eligible
 
-    entries = run_harvest(creators)
+    entries = run_harvest(creators, max_uploads=max_uploads)
     print_summary(entries)
     return 0
 

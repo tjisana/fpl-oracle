@@ -18,6 +18,7 @@ whole transcripts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -36,12 +37,18 @@ class RankClaimCandidate(BaseModel):
     than an enum since the extraction prompt that populates this (out of
     scope here) may need to evolve its own vocabulary independently of
     this schema.
+
+    Deliberately does NOT store a video URL: a stored URL can drift out
+    of sync with `timestamp_s` (e.g. one gets edited, the other doesn't)
+    and there's nothing enforcing they agree. `video_id` + `timestamp_s`
+    is the single source of truth; `video_url_at_timestamp()` derives the
+    link from them wherever one is needed (currently just
+    `render_claims_review`).
     """
 
     creator_id: str
     video_id: str
     video_title: str
-    video_url_at_timestamp: str
     timestamp_s: int
     quote: str
     claimed_season: str
@@ -49,6 +56,12 @@ class RankClaimCandidate(BaseModel):
     claim_kind: str
     quote_verified: bool = False
     notes: str | None = None
+    # Optional: the video's own publish date. Not needed to render or
+    # verify a claim, but it's the fastest sanity check available to the
+    # owner for what "last season" / "this year" meant in the creator's
+    # own mouth — render it when present so they don't have to click
+    # through just to see it.
+    published_at: datetime | None = None
 
 
 def video_url_at_timestamp(video_id: str, timestamp_s: int) -> str:
@@ -92,14 +105,26 @@ def _format_timestamp(seconds: int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def _render_safe_quote(quote: str) -> str:
+    """Collapse a quote's internal whitespace (including newlines) down
+    to single spaces before rendering it as a markdown blockquote — an
+    un-collapsed newline inside the quote would break out of the `>
+    ...` line and corrupt the surrounding list structure."""
+    return " ".join(quote.split())
+
+
 def render_claims_review(
     candidates: list[RankClaimCandidate],
     creator_names: dict[str, str] | None = None,
 ) -> str:
     """Render `candidates` into the human-review markdown: one `##`
     section per creator (sorted by `creator_id` for a stable order),
-    each claim as its own subsection showing the quote, a timestamped
-    link, season, claimed rank, claim kind, and verified flag.
+    each claim as its own subsection showing the quote (as a proper
+    markdown blockquote), a timestamped link (derived from `video_id` +
+    `timestamp_s`, never stored — see `RankClaimCandidate`'s docstring),
+    season, video publish date (when known), claimed rank, claim kind,
+    verified flag, and an `- [ ] Approve` checkbox so this file doubles
+    as the actual decision record, not just a display of the data.
 
     `creator_names` maps creator_id -> display name; a creator missing
     from it (or when the whole map is omitted) falls back to showing
@@ -123,17 +148,22 @@ def render_claims_review(
         for candidate in by_creator[creator_id]:
             marker = "VERIFIED" if candidate.quote_verified else "UNVERIFIED — check manually"
             rank_display = candidate.claimed_rank if candidate.claimed_rank is not None else "n/a"
+            url = video_url_at_timestamp(candidate.video_id, candidate.timestamp_s)
             lines.append(f"### {candidate.video_title}")
             lines.append("")
             lines.append(f"- Quote verified: **{marker}**")
             lines.append(f"- Season: {candidate.claimed_season}")
+            if candidate.published_at is not None:
+                lines.append(f"- Video published: {candidate.published_at.date().isoformat()}")
             lines.append(f"- Claimed rank: {rank_display}")
             lines.append(f"- Claim kind: {candidate.claim_kind}")
             timestamp_label = _format_timestamp(candidate.timestamp_s)
-            lines.append(f"- Timestamp: [{timestamp_label}]({candidate.video_url_at_timestamp})")
-            lines.append(f"- Quote: > {candidate.quote}")
+            lines.append(f"- Timestamp: [{timestamp_label}]({url})")
+            lines.append("- Quote:")
+            lines.append(f"  > {_render_safe_quote(candidate.quote)}")
             if candidate.notes:
                 lines.append(f"- Notes: {candidate.notes}")
+            lines.append("- [ ] Approve")
             lines.append("")
 
     return "\n".join(lines) + "\n"

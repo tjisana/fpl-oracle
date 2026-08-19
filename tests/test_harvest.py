@@ -23,7 +23,7 @@ from fpl_oracle.roster.claims import (
     verify_candidates,
     video_url_at_timestamp,
 )
-from fpl_oracle.roster.harvest import is_season_review_candidate
+from fpl_oracle.roster.harvest import _season_review_window_start, is_season_review_candidate
 
 
 class TestIsSeasonReviewCandidatePositive:
@@ -119,10 +119,36 @@ class TestQuoteInTranscript:
     def test_whitespace_only_quote_fails(self) -> None:
         assert not quote_in_transcript("   \n  ", "any transcript text at all")
 
-    def test_case_sensitive(self) -> None:
-        # Mechanical, exact-substring by design (see module docstring) —
-        # no case-folding either.
-        assert not quote_in_transcript("MY FINAL RANK", "my final rank was 588th")
+    def test_case_insensitive(self) -> None:
+        # Auto-generated transcripts are near-uniformly lowercase while
+        # an extraction LLM tends to sentence-case a "verbatim" quote —
+        # case-folding (but nothing fuzzier) keeps a genuinely verbatim
+        # quote from flipping to UNVERIFIED for a reason unrelated to
+        # whether the words are really there.
+        assert quote_in_transcript("MY FINAL RANK", "my final rank was 588th")
+
+    def test_mixed_case_verbatim_quote_verifies(self) -> None:
+        transcript = "my final rank and where i finished for the 2025/26 season is 588th"
+        quote = "My Final Rank And Where I Finished For The 2025/26 Season Is 588th"
+        assert quote_in_transcript(quote, transcript)
+
+    def test_punctuation_is_not_normalized(self) -> None:
+        # Case-folding is mechanical enough to belong here; punctuation
+        # normalization is deliberately NOT — that stays the extraction
+        # prompt's job (see module docstring).
+        transcript = "i finished 588th in the world this season"
+        assert not quote_in_transcript("i finished 588th, in the world", transcript)
+
+
+class TestSeasonReviewWindowStart:
+    def test_returns_may_1_of_given_year(self) -> None:
+        now = datetime(2026, 8, 18, tzinfo=UTC)
+        assert _season_review_window_start(now) == datetime(2026, 5, 1, tzinfo=UTC)
+
+    def test_defaults_to_current_time_when_omitted(self) -> None:
+        result = _season_review_window_start()
+        assert result.month == 5
+        assert result.day == 1
 
 
 class TestFilterMinDuration:
@@ -169,7 +195,6 @@ class TestVerifyCandidates:
             creator_id="andy",
             video_id=video_id,
             video_title="My Season Review",
-            video_url_at_timestamp=video_url_at_timestamp(video_id, 120),
             timestamp_s=120,
             quote=quote,
             claimed_season="2025/26",
@@ -210,18 +235,24 @@ class TestVerifyCandidates:
 
 
 class TestRenderClaimsReview:
-    def _candidate(self, creator_id: str, verified: bool) -> RankClaimCandidate:
+    def _candidate(
+        self,
+        creator_id: str,
+        verified: bool,
+        quote: str = "my final rank was 588th",
+        published_at: datetime | None = None,
+    ) -> RankClaimCandidate:
         return RankClaimCandidate(
             creator_id=creator_id,
             video_id="vid1",
             video_title="My Season Review",
-            video_url_at_timestamp=video_url_at_timestamp("vid1", 90),
             timestamp_s=90,
-            quote="my final rank was 588th",
+            quote=quote,
             claimed_season="2025/26",
             claimed_rank=588,
             claim_kind="overall_rank",
             quote_verified=verified,
+            published_at=published_at,
         )
 
     def test_empty_candidates_says_so(self) -> None:
@@ -238,8 +269,34 @@ class TestRenderClaimsReview:
         assert "2025/26" in rendered
         assert "588" in rendered
         assert "overall_rank" in rendered
+        # URL is derived from video_id + timestamp_s (never stored) —
+        # matches what video_url_at_timestamp("vid1", 90) builds.
         assert "[1:30](https://www.youtube.com/watch?v=vid1&t=90)" in rendered
-        assert "> my final rank was 588th" in rendered
+        assert video_url_at_timestamp("vid1", 90) in rendered
+        # Quote renders as its own blockquote line, not inline in the
+        # "- Quote:" bullet.
+        assert "- Quote:\n  > my final rank was 588th" in rendered
+        assert "- [ ] Approve" in rendered
+
+    def test_multiline_quote_collapsed_into_single_blockquote_line(self) -> None:
+        candidate = self._candidate("andy", verified=True, quote="my final rank\nwas 588th")
+        rendered = render_claims_review([candidate])
+        assert "- Quote:\n  > my final rank was 588th" in rendered
+        # The raw newline must not survive into the rendered file — it
+        # would break the blockquote out of the list structure.
+        assert "my final rank\nwas 588th" not in rendered
+
+    def test_published_at_rendered_when_present(self) -> None:
+        candidate = self._candidate(
+            "andy", verified=True, published_at=datetime(2026, 5, 28, tzinfo=UTC)
+        )
+        rendered = render_claims_review([candidate])
+        assert "- Video published: 2026-05-28" in rendered
+
+    def test_published_at_omitted_when_absent(self) -> None:
+        candidate = self._candidate("andy", verified=True, published_at=None)
+        rendered = render_claims_review([candidate])
+        assert "Video published" not in rendered
 
     def test_unverified_claim_flagged_for_manual_check(self) -> None:
         candidate = self._candidate("andy", verified=False)
@@ -258,3 +315,11 @@ class TestRenderClaimsReview:
         ]
         rendered = render_claims_review(candidates)
         assert rendered.index("`alpha`") < rendered.index("`zeta`")
+
+    def test_every_claim_gets_its_own_approve_checkbox(self) -> None:
+        candidates = [
+            self._candidate("andy", verified=True),
+            self._candidate("andy", verified=False),
+        ]
+        rendered = render_claims_review(candidates)
+        assert rendered.count("- [ ] Approve") == 2

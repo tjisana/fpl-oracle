@@ -18,7 +18,12 @@ from rich.console import Console
 from rich.table import Table
 
 from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript, save_transcript
-from fpl_oracle.ingest.youtube_client import VideoInfo, get_video_durations, list_recent_videos
+from fpl_oracle.ingest.youtube_client import (
+    VideoInfo,
+    YouTubeApiError,
+    get_video_durations,
+    list_recent_videos,
+)
 from fpl_oracle.roster.models import Creator
 from fpl_oracle.roster.registry import REGISTRY
 
@@ -145,7 +150,20 @@ def ingest_one(creator: Creator, registry: list[Creator]) -> IngestedTranscript 
         )
         return None
 
-    durations = get_video_durations([v.video_id for v in attributed])
+    try:
+        durations = get_video_durations([v.video_id for v in attributed])
+    except YouTubeApiError as e:
+        # A quota blip or transient API failure must not zero out a
+        # deadline-morning ingest run. Same fallback the filter itself
+        # already applies to any individual video it has no duration
+        # for (see `filter_min_duration`'s docstring) — "unknown" is
+        # kept, never treated as "too short".
+        print(
+            f"run_ingest: duration lookup failed ({e}) — skipping the min-duration "
+            f"Shorts filter for {creator.name}, proceeding unfiltered",
+            file=sys.stderr,
+        )
+        durations = {}
     selectable = filter_min_duration(attributed, durations)
     if not selectable:
         print(
