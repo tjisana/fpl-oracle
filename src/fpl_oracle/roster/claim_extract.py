@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -257,44 +258,87 @@ def extract_rank_claims(
 DEFAULT_CANDIDATES_PATH = Path("data/harvest/claims_candidates.json")
 
 
-def save_candidates(
-    candidates: list[RankClaimCandidate], path: Path = DEFAULT_CANDIDATES_PATH
+class SweepFailure(BaseModel):
+    creator_id: str
+    video_id: str
+    error: str
+
+
+class SavedSweep(BaseModel):
+    """The persisted envelope of a claim sweep: raw (pre-verification)
+    candidates AND the per-video failures, so both the review rendering
+    and the FAILED section can be reproduced offline — an LLM sweep is
+    paid for once, and the record of holes in it is never lost."""
+
+    candidates: list[RankClaimCandidate] = []
+    failures: list[SweepFailure] = []
+
+
+def save_sweep(
+    candidates: list[RankClaimCandidate],
+    failures: list[SweepFailure],
+    processed_video_ids: set[str],
+    path: Path = DEFAULT_CANDIDATES_PATH,
 ) -> Path:
-    """Persist raw (pre-verification) candidates so verification and
-    rendering can be re-run offline — an LLM sweep is paid for once."""
+    """Merge this run's results into the saved sweep: entries for videos
+    processed THIS run (successes, empties, and failures alike) replace
+    their old entries; videos untouched this run keep theirs. A
+    creator-filtered re-run therefore never clobbers the rest of the
+    sweep, and a failure that later succeeds is cleared."""
+    merged = SavedSweep()
+    if path.exists():
+        old = SavedSweep.model_validate_json(path.read_text())
+        merged.candidates = [c for c in old.candidates if c.video_id not in processed_video_ids]
+        merged.failures = [f for f in old.failures if f.video_id not in processed_video_ids]
+    merged.candidates += candidates
+    merged.failures += failures
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([json.loads(c.model_dump_json()) for c in candidates], indent=2))
+    path.write_text(merged.model_dump_json(indent=2))
     return path
+
+
+def _append_failures_section(path: Path, failures: list[SweepFailure]) -> None:
+    if not failures:
+        return
+    lines = ["", "## FAILED extractions — review these videos manually", ""]
+    lines += [f"- {f.creator_id} — video `{f.video_id}`: {f.error}" for f in failures]
+    with path.open("a") as fh:
+        fh.write("\n".join(lines) + "\n")
 
 
 def reverify_saved_candidates(
     candidates_path: Path = DEFAULT_CANDIDATES_PATH,
 ) -> Path:
-    """Re-run quote verification + review rendering from saved candidates
-    and cached transcripts — no LLM calls, no network for cached videos."""
-    raw = json.loads(candidates_path.read_text())
-    candidates = [RankClaimCandidate.model_validate(c) for c in raw]
+    """Re-run quote verification + review rendering (FAILED section
+    included) from the saved sweep and cached transcripts — no LLM calls,
+    no network for cached videos."""
+    sweep = SavedSweep.model_validate_json(candidates_path.read_text())
     transcripts: dict[str, Transcript] = {}
-    for video_id in {c.video_id for c in candidates}:
+    for video_id in {c.video_id for c in sweep.candidates}:
         transcript = fetch_transcript(video_id)
         if transcript is not None:
             transcripts[video_id] = transcript
     names = {c.creator_id: c.name for c in REGISTRY}
-    verified = verify_candidates(candidates, transcripts)
-    return write_claims_review(verified, creator_names=names)
+    verified = verify_candidates(sweep.candidates, transcripts)
+    path = write_claims_review(verified, creator_names=names)
+    _append_failures_section(path, sweep.failures)
+    return path
 
 
 def run_claim_extraction(
     manifest_path: Path = DEFAULT_MANIFEST_PATH,
     creator_ids: list[str] | None = None,
+    candidates_path: Path = DEFAULT_CANDIDATES_PATH,
 ) -> Path:
     """Extract claims for every transcript-bearing entry in the harvest
     manifest, verify quotes, and write the owner-review markdown. Returns
     the review file path.
 
-    Per-video extraction failures are non-fatal: they're logged, listed
-    in a FAILED section of the review file, and never discard the
-    candidates (and API spend) of videos that succeeded."""
+    Per-video extraction failures are non-fatal: they're logged, persisted
+    in the saved sweep, listed in a FAILED section of the review file, and
+    never discard the candidates (and API spend) of videos that succeeded.
+    Results merge into `candidates_path` per video (see `save_sweep`), so
+    a creator-filtered re-run never clobbers the rest of the sweep."""
     entries = json.loads(manifest_path.read_text())
     known_ids = {e["creator_id"] for e in entries}
     if creator_ids is not None:
@@ -304,20 +348,26 @@ def run_claim_extraction(
 
     names = {c.creator_id: c.name for c in REGISTRY}
     all_candidates: list[RankClaimCandidate] = []
-    transcripts: dict[str, Transcript] = {}
-    failures: list[tuple[str, str, str]] = []  # (creator_id, video_id, error)
+    failures: list[SweepFailure] = []
+    processed_video_ids: set[str] = set()
 
     for entry in entries:
         if creator_ids is not None and entry["creator_id"] not in creator_ids:
             continue
         if not entry.get("transcript_available"):
             continue
+        processed_video_ids.add(entry["video_id"])
         transcript = fetch_transcript(entry["video_id"])  # cache-hit for harvested videos
         if transcript is None:
             logger.warning("transcript vanished for video %s — skipping", entry["video_id"])
-            failures.append((entry["creator_id"], entry["video_id"], "transcript vanished"))
+            failures.append(
+                SweepFailure(
+                    creator_id=entry["creator_id"],
+                    video_id=entry["video_id"],
+                    error="transcript vanished",
+                )
+            )
             continue
-        transcripts[entry["video_id"]] = transcript
         published_at = (
             datetime.fromisoformat(entry["published_at"]) if entry.get("published_at") else None
         )
@@ -338,7 +388,11 @@ def run_claim_extraction(
                 entry["video_id"],
                 e,
             )
-            failures.append((entry["creator_id"], entry["video_id"], str(e)))
+            failures.append(
+                SweepFailure(
+                    creator_id=entry["creator_id"], video_id=entry["video_id"], error=str(e)
+                )
+            )
             continue
         logger.info(
             "claims: %s — %d candidate(s) from %r",
@@ -348,19 +402,10 @@ def run_claim_extraction(
         )
         all_candidates.extend(candidates)
 
-    save_candidates(all_candidates)
-    verified = verify_candidates(all_candidates, transcripts)
-    path = write_claims_review(verified, creator_names=names)
-    if failures:
-        failed_lines = ["", "## FAILED extractions — review these videos manually", ""]
-        failed_lines += [
-            f"- {creator_id} — video `{video_id}`: {error}"
-            for creator_id, video_id, error in failures
-        ]
-        with path.open("a") as f:
-            f.write("\n".join(failed_lines) + "\n")
-        logger.warning("claims: %d video(s) failed extraction — listed in %s", len(failures), path)
-    return path
+    save_sweep(all_candidates, failures, processed_video_ids, path=candidates_path)
+    # Render from the MERGED sweep so a filtered re-run still produces the
+    # full review document (and the FAILED section) for every creator.
+    return reverify_saved_candidates(candidates_path=candidates_path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -377,7 +422,14 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.reverify:
-        path = reverify_saved_candidates()
+        try:
+            path = reverify_saved_candidates()
+        except FileNotFoundError:
+            print(
+                f"no saved candidates at {DEFAULT_CANDIDATES_PATH} — run the sweep first",
+                file=sys.stderr,
+            )
+            return 1
     else:
         path = run_claim_extraction(creator_ids=args.creator_ids or None)
     print(f"claims review written to {path} — every claim needs owner approval")

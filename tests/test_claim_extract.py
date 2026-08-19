@@ -243,12 +243,18 @@ class TestRunClaimExtraction:
             )[1],
         )
 
-        result = ce.run_claim_extraction(manifest_path=self._manifest(tmp_path, self._entries()))
+        result = ce.run_claim_extraction(
+            manifest_path=self._manifest(tmp_path, self._entries()),
+            candidates_path=tmp_path / "sweep.json",
+        )
 
         assert result == review_path
         text = review_path.read_text()
         assert "FAILED extractions" in text
         assert "vid999" in text
+        # the failure is persisted in the sweep envelope, not just the markdown
+        sweep = ce.SavedSweep.model_validate_json((tmp_path / "sweep.json").read_text())
+        assert [f.video_id for f in sweep.failures] == ["vid999"]
 
     def test_unknown_creator_id_fails_loudly(self, tmp_path):
         from fpl_oracle.roster import claim_extract as ce
@@ -272,7 +278,10 @@ class TestRunClaimExtraction:
                 review_path,
             )[1],
         )
-        ce.run_claim_extraction(manifest_path=self._manifest(tmp_path, self._entries()))
+        ce.run_claim_extraction(
+            manifest_path=self._manifest(tmp_path, self._entries()),
+            candidates_path=tmp_path / "sweep.json",
+        )
         text = review_path.read_text()
         assert "transcript vanished" in text
 
@@ -307,21 +316,32 @@ def test_marker_polluted_quote_now_verifies_and_locates(monkeypatch):
     assert verified.quote_verified is True
 
 
-def test_save_and_reverify_round_trip(monkeypatch, tmp_path):
-    from fpl_oracle.roster import claim_extract as ce
+def _candidate(video_id="vid123", quote="this season i finished 588th in the world"):
+    from datetime import UTC, datetime
+
     from fpl_oracle.roster.claims import RankClaimCandidate
 
-    candidate = RankClaimCandidate(
+    return RankClaimCandidate(
         creator_id="lets-talk-fpl",
-        video_id="vid123",
+        video_id=video_id,
         video_title="SEASON REVIEW",
         timestamp_s=4,
-        quote="this season i finished 588th in the world",
+        quote=quote,
         claimed_season="2025/26",
         claimed_rank=588,
         claim_kind="overall_rank",
+        published_at=datetime(2026, 6, 1, 12, 30, tzinfo=UTC),
     )
-    saved = ce.save_candidates([candidate], path=tmp_path / "cands.json")
+
+
+def test_save_and_reverify_round_trip(monkeypatch, tmp_path):
+    from datetime import UTC, datetime
+
+    from fpl_oracle.roster import claim_extract as ce
+
+    candidate = _candidate()
+    failure = ce.SweepFailure(creator_id="fpl-focal", video_id="vid999", error="boom")
+    saved = ce.save_sweep([candidate], [failure], {"vid123", "vid999"}, path=tmp_path / "s.json")
 
     monkeypatch.setattr(ce, "fetch_transcript", lambda vid: _transcript())
     review_path = tmp_path / "review.md"
@@ -329,8 +349,41 @@ def test_save_and_reverify_round_trip(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ce,
         "write_claims_review",
-        lambda cands, creator_names=None: (written.update(c=cands), review_path)[1],
+        lambda cands, creator_names=None: (
+            written.update(c=cands),
+            review_path.write_text("# review\n"),
+            review_path,
+        )[2],
     )
     assert ce.reverify_saved_candidates(candidates_path=saved) == review_path
     (verified,) = written["c"]
     assert verified.quote_verified is True
+    # tz-aware datetime survived the JSON round trip
+    assert verified.published_at == datetime(2026, 6, 1, 12, 30, tzinfo=UTC)
+    # reverify re-appends the persisted FAILED section
+    assert "FAILED extractions" in review_path.read_text()
+    assert "vid999" in review_path.read_text()
+
+
+def test_save_sweep_merges_per_video(tmp_path):
+    from fpl_oracle.roster import claim_extract as ce
+
+    path = tmp_path / "s.json"
+    a = _candidate(video_id="vidA", quote="claim a")
+    b_old = _candidate(video_id="vidB", quote="old b claim")
+    fail_c = ce.SweepFailure(creator_id="x", video_id="vidC", error="refused")
+    ce.save_sweep([a, b_old], [fail_c], {"vidA", "vidB", "vidC"}, path=path)
+
+    # filtered re-run touching only vidB and vidC: B replaced (fewer claims
+    # is fine), C's failure cleared by success, A untouched
+    b_new = _candidate(video_id="vidB", quote="new b claim")
+    c_new = _candidate(video_id="vidC", quote="c claim now works")
+    ce.save_sweep([b_new, c_new], [], {"vidB", "vidC"}, path=path)
+
+    sweep = ce.SavedSweep.model_validate_json(path.read_text())
+    assert sorted(c.quote for c in sweep.candidates) == [
+        "c claim now works",
+        "claim a",
+        "new b claim",
+    ]
+    assert sweep.failures == []
