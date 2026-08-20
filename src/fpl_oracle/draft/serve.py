@@ -28,7 +28,11 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from fpl_oracle.draft.webapp import render
+from fpl_oracle.draft.board import build_board
+from fpl_oracle.draft.client import fetch_bootstrap
+from fpl_oracle.draft.expert_rankings import ALL_BOARDS
+from fpl_oracle.draft.simulate import Simulator
+from fpl_oracle.draft.webapp import LEAGUE, render
 
 API = "https://draft.premierleague.com/api"
 HEADERS = {
@@ -56,6 +60,7 @@ def _upstream(path: str) -> tuple[int, dict]:
 
 class Handler(BaseHTTPRequestHandler):
     html: str = ""
+    sim: Simulator | None = None
 
     def log_message(self, format: str, *args: object) -> None:
         """Silence request logging — the terminal is the user's draft console."""
@@ -77,6 +82,24 @@ class Handler(BaseHTTPRequestHandler):
 
         if url.path in ("/", "/index.html"):
             self._send(200, self.html.encode(), "text/html; charset=utf-8")
+            return
+
+        if self.sim is not None and url.path in ("/api/picks", "/api/league"):
+            payload = (
+                self.sim.choices_payload()
+                if url.path == "/api/picks"
+                else self.sim.details_payload()
+            )
+            self._json(200, payload)
+            return
+
+        if self.sim is not None and url.path == "/api/sim/pick":
+            element = (query.get("element") or [""])[0]
+            if not element.isdigit():
+                self._json(400, {"error": "element must be numeric"})
+                return
+            ok, message = self.sim.user_pick(int(element))
+            self._json(200 if ok else 409, {"ok": ok, "message": message})
             return
 
         if url.path in ("/api/picks", "/api/league"):
@@ -103,6 +126,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=8777)
     ap.add_argument("--refresh", action="store_true", help="refetch injury news first")
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument(
+        "--simulate",
+        action="store_true",
+        help="practice draft: bots pick and it pauses on your turn",
+    )
+    ap.add_argument("--pick-seconds", type=float, default=2.5)
+    ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args(argv)
 
     html = render(args.teams, refresh=args.refresh)
@@ -110,11 +140,30 @@ def main(argv: list[str] | None = None) -> int:
         # Hand the league id to the page so it can start polling immediately.
         html = html.replace("const LEAGUE_ID = null;", f"const LEAGUE_ID = {args.league};")
 
+    if args.simulate:
+        entries = [m.team for m in LEAGUE]
+        me = next((m.team for m in LEAGUE if m.me), entries[0])
+        if args.league:
+            code, payload = _upstream(f"league/{args.league}/details")
+            if code == 200 and payload.get("league_entries"):
+                entries = [e["entry_name"] for e in payload["league_entries"]]
+        board = build_board(fetch_bootstrap(), len(entries), ALL_BOARDS)
+        Handler.sim = Simulator(
+            entries, me, board, seconds_per_pick=args.pick_seconds, seed=args.seed
+        )
+        Handler.sim.start()
+        # The page must poll this server, not the real league.
+        html = html.replace("const LEAGUE_ID = null;", "const LEAGUE_ID = 0;")
+        html = html.replace(f"const LEAGUE_ID = {args.league};", "const LEAGUE_ID = 0;")
+        html = html.replace("const SIM_MODE = false;", "const SIM_MODE = true;")
+        print(f"PRACTICE DRAFT — bots pick every {args.pick_seconds}s and stop on your turn ({me})")
+        print("  order: " + " > ".join(Handler.sim.order))
+
     Handler.html = html
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
 
-    if args.league:
+    if args.league and not args.simulate:
         code, payload = _upstream(f"league/{args.league}/details")
         if code == 200:
             league = payload.get("league", {})

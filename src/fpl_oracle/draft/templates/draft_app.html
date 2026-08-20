@@ -173,6 +173,7 @@
 
 <script>
 const LEAGUE_ID = null;   // replaced by serve.py when --league is passed
+const SIM_MODE = false;   // true in practice mode
 const PLAYERS = __PLAYERS__;
 const MANAGERS = __MANAGERS__;
 let TEAMS = MANAGERS.length;   // corrected from the API when syncing
@@ -302,9 +303,19 @@ entry.addEventListener("keydown", e=>{
   else if(e.key==="Escape"){ sugg=[]; drawSuggest(); }
 });
 
-function commit(p){
+async function commit(p){
+  entry.value=""; sugg=[]; drawSuggest();
+  if(SIM_MODE){
+    try{
+      const r = await fetch(`/api/sim/pick?element=${p.id}`, {cache:"no-store"});
+      const d = await r.json();
+      if(!d.ok){ setSyncStatus(d.message, "var(--bad)"); return; }
+    }catch(e){ setSyncStatus("sim unreachable", "var(--bad)"); return; }
+    await poll();
+    return;
+  }
   S.picks.push({id:p.id, slot: slotFor(S.picks.length)});
-  save(); entry.value=""; sugg=[]; drawSuggest(); render();
+  save(); render();
 }
 
 /* ---- rendering ---- */
@@ -319,6 +330,9 @@ function render(){
   const clock = document.getElementById("clock");
   clock.textContent = done ? "Draft complete" : (mine ? `YOUR PICK — ${onClock}` : `On the clock: ${onClock}`);
   clock.className = "clock" + (mine && !done ? " mine" : "");
+  if(SIM_MODE && !done){
+    clock.textContent = (mine ? "YOUR PICK (practice) \u2014 " : "practice \u00b7 on the clock: ") + onClock;
+  }
   document.getElementById("progress").textContent =
     done ? `${i} picks` : `Round ${Math.floor(i/TEAMS)+1} · pick ${i+1} of ${TEAMS*SQUAD_SIZE}`;
   document.getElementById("baselines").textContent =
@@ -504,7 +518,7 @@ async function startSync(id){
   }catch(e){ /* non-fatal: fall back to the configured count */ }
   if(syncTimer) clearInterval(syncTimer);
   poll();
-  syncTimer = setInterval(poll, 4000);
+  syncTimer = setInterval(poll, SIM_MODE ? 1000 : 4000);
 }
 function stopSync(){
   if(syncTimer) clearInterval(syncTimer);
@@ -533,7 +547,8 @@ document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{
 });
 
 /* Boot: prefer the id baked in by serve.py, else whatever we synced with last. */
-const bootLeague = LEAGUE_ID || S.leagueId;
+// 0 is a valid injected id (practice mode), so test for null explicitly
+const bootLeague = (LEAGUE_ID !== null) ? LEAGUE_ID : S.leagueId;
 if(bootLeague){
   document.getElementById("leagueId").value = bootLeague;
   startSync(bootLeague);
