@@ -1,5 +1,9 @@
 # fpl-oracle build plan — GW1 draft-mode sprint
 
+> **This file is the BUILD LOG** — what was done, and why, decision by decision.
+> For what's NEXT, see [ROADMAP.md](ROADMAP.md). Keep new work items there;
+> record completed work and the reasoning behind it here.
+
 Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after.
 
 ## Phase 1 — Roster (days 1–2)
