@@ -72,9 +72,13 @@ def render(teams: int, *, refresh: bool = False, league: list[Manager] | None = 
             "flag": p.available_flag,
             "experts": p.expert_ranks,
         }
-        # Trim the long tail: nobody drafts the 400th-ranked player, and a
-        # smaller payload keeps autocomplete instant.
-        for p in sorted(board.players, key=lambda x: x.consensus_rank)[:320]
+        # EVERY player, never a top-N slice. The players actually drafted are
+        # not the top N on a VALUE board: backup keepers and squad-filler
+        # defenders rank near the bottom and still get picked in the late
+        # rounds. Trimming to 320 hid 14 of 150 real picks in the first live
+        # draft, and because an unseen pick was dropped rather than counted,
+        # every "whose turn is it" after round 7 was off by one.
+        for p in sorted(board.players, key=lambda x: x.consensus_rank)
     ]
 
     html = TEMPLATE.read_text()
