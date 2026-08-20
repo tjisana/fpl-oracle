@@ -384,6 +384,65 @@ def _tier1_trustworthy(name_raw: str, candidate: _Candidate) -> bool:
     )
 
 
+def _first_name_reference(name_raw: str, scored: list[_Candidate]) -> _Candidate | None:
+    """Resolve a bare FIRST-NAME reference via the composite key.
+
+    Creators say "Bruno", "Reiss", "Cody" and let context do the rest. The
+    fuzzy tiers handle this badly in both directions, and both were real on
+    live data:
+
+    - MISSES. `token_set_ratio("Bruno", "Bruno Fernandes")` is a subset-100,
+      exactly the pathology Tier-1's subset hardening exists to reject — so
+      six picks for the most-owned midfielder in the game were dropped.
+    - WRONG MATCHES, which are worse. A first name often sounds like some
+      OTHER player's surname at the same club, and Tier 2 only asks for
+      phonetic + team + position: "Reiss" (Nelson) resolved to Rice, "Ryan"
+      (Christie) to Rayan, "Antoni" (Milambo) to Anthony. A 599-player probe
+      found 33 such wrong matches.
+
+    Handling first names EXPLICITLY fixes both, because the composite key
+    already carries the information needed: if exactly one player at the
+    inferred club and position has this first name, that is who was meant.
+    Requiring team AND position to positively agree (not merely fail to
+    contradict) keeps it narrow, and this defers entirely to a real
+    web_name/full_name match elsewhere in the pool — "Anthony" the surname
+    must always beat "Anthony" someone's first name.
+    """
+    raw = _normalize(name_raw)
+    if not raw:
+        return None
+    # Defer to a real web_name/full_name in the pool — a surname beats a
+    # first name. Two refinements, both load-bearing:
+    #
+    # - Compared on the NORMALIZED string, not the token set, because ASR
+    #   splits words: "Harr ison" is two tokens but is plainly the surname
+    #   Harrison, and must not resolve to Harrison Armstrong's first name.
+    # - Only when that surname match doesn't CONTRADICT the supplied
+    #   position. "Gabriel" is Gabriel Magalhaes's web_name, but three
+    #   Arsenal players share it as a first name; asking for a MID means
+    #   Martinelli, and deferring to the DEF would strand a reference the
+    #   composite key can resolve — the exact case the fpl-domain skill
+    #   calls out as what the composite key is FOR.
+    if any(
+        (
+            c.exact_name
+            or _normalize(c.player.web_name) == raw
+            or _normalize(c.player.full_name) == raw
+        )
+        and c.position_agree is not False
+        for c in scored
+    ):
+        return None
+    matches = [
+        c
+        for c in scored
+        if _normalize(c.player.first_name) == raw
+        and c.team_agree is True
+        and c.position_agree is True
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 class PlayerDB:
     """All bootstrap-static players, keyed by id, plus the composite-key
     resolver. Construct via `from_bootstrap` (offline, testable) or
@@ -504,6 +563,19 @@ class PlayerDB:
         scored.sort(key=lambda c: c.fuzzy, reverse=True)
         review_candidates = [c.player for c in scored[:_REVIEW_CANDIDATE_COUNT]]
         best = scored[0]
+
+        # Bare first name, disambiguated by the composite key — checked
+        # BEFORE the fuzzy tiers, which both miss these and mis-resolve them
+        # (see `_first_name_reference`).
+        first_name_match = _first_name_reference(name_raw, scored)
+        if first_name_match is not None:
+            return MatchResult(
+                player=first_name_match.player,
+                score=first_name_match.fuzzy,
+                status=MatchStatus.MATCHED,
+                candidates=review_candidates,
+                name_raw=name_raw,
+            )
 
         # Tier 1: a strong fuzzy score. Trusted only once contradiction
         # veto + subset hardening clear it (see _tier1_trustworthy and the

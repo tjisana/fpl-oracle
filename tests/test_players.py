@@ -383,6 +383,54 @@ class TestResolveFirstNameOnlyPathology:
         assert result.status in (MatchStatus.AMBIGUOUS, MatchStatus.UNMATCHED)
 
 
+class TestResolveFirstNameReference:
+    """Creators say a bare FIRST name — "Bruno", "Gabriel" — and rely on
+    context. The composite key already carries what's needed to resolve
+    it; `_first_name_reference` uses it explicitly, because the fuzzy
+    tiers got this wrong in BOTH directions on live data (six "Bruno"
+    picks dropped as subset-100 pathologies, and 33 first names in a
+    599-player probe silently resolved to a phonetically-similar
+    TEAMMATE's surname)."""
+
+    def test_first_name_resolves_when_club_and_position_pin_it(self, db: PlayerDB) -> None:
+        # Three Arsenal players share the first name "Gabriel" — the
+        # fpl-domain skill's canonical example of what the composite key
+        # is for. Position alone separates all three.
+        for position, expected in (("DEF", "Gabriel"), ("MID", "Martinelli"), ("FWD", "G.Jesus")):
+            result = db.resolve("Gabriel", team_inferred="Arsenal", position_inferred=position)
+            assert result.status == MatchStatus.MATCHED, position
+            assert result.player is not None
+            assert result.player.web_name == expected
+
+    def test_a_real_surname_still_beats_someone_elses_first_name(self, db: PlayerDB) -> None:
+        # "Cole" is Palmer's FIRST name, but the reference must not fire
+        # when it would override a genuine surname match at a
+        # non-contradicting position. Palmer is the only "Cole" here, so
+        # asking for his club+position must still reach him by surname
+        # logic rather than being hijacked.
+        result = db.resolve("Palmer", team_inferred="Chelsea", position_inferred="MID")
+        assert result.status == MatchStatus.MATCHED
+        assert result.player is not None
+        assert result.player.web_name == "Palmer"
+
+    def test_first_name_alone_without_composite_key_still_refuses(self, db: PlayerDB) -> None:
+        # The rule demands team AND position BOTH positively agree. With
+        # neither supplied it must never fire — this is what keeps the
+        # long-standing bare-"Mohamed"/"Cole" pathology closed.
+        for raw in ("Gabriel", "Mohamed", "Cole"):
+            result = db.resolve(raw)
+            assert result.player is None, raw
+
+    def test_first_name_with_contradicting_position_does_not_fire(self, db: PlayerDB) -> None:
+        # Bukayo Saka is a MID; asking for a GK named "Bukayo" is not him.
+        result = db.resolve("Bukayo", team_inferred="Arsenal", position_inferred="GK")
+        assert result.player is None
+
+    def test_first_name_needs_the_team_to_agree(self, db: PlayerDB) -> None:
+        result = db.resolve("Bukayo", team_inferred="Liverpool", position_inferred="MID")
+        assert result.player is None
+
+
 class TestResolveTier1ContradictionVeto:
     def test_stale_team_hint_does_not_veto_an_exact_name(self, db: PlayerDB) -> None:
         # BEHAVIOUR CHANGE (2026-08-19), driven by the first live GW1 run:
