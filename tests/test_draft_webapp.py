@@ -86,9 +86,14 @@ def test_league_matches_the_real_draft(html: str) -> None:
     assert len({m.team for m in LEAGUE}) == 10, "duplicate team name would break the snake order"
 
 
-def test_board_is_trimmed_but_deep_enough_for_a_full_draft(html: str) -> None:
-    """10 teams x 15 = 150 picks, so the pool must comfortably exceed that."""
-    assert len(_embedded(html, "PLAYERS")) > 150
+def test_every_player_is_shipped_not_a_top_slice(html: str, payload: dict) -> None:
+    """A value-ranked top-N slice is NOT a superset of who actually gets drafted.
+
+    Trimming to 320 hid 14 of 150 picks in the first live draft — five backup
+    keepers went in the last two rounds alone. Any slice reintroduces the bug,
+    so assert the whole pool ships.
+    """
+    assert len(_embedded(html, "PLAYERS")) == len(payload["elements"])
 
 
 def test_custom_league_size_changes_the_baselines(monkeypatch, payload) -> None:

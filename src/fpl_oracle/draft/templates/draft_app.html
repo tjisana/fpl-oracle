@@ -217,7 +217,8 @@ function slotFor(pickIndex){
 }
 const takenIds = () => new Set(S.picks.map(p=>p.id));
 const available = () => { const t = takenIds(); return PLAYERS.filter(p=>!t.has(p.id)); };
-const mySquad = () => S.me < 0 ? [] : S.picks.filter(p=>p.slot===S.me).map(p=>byId[p.id]);
+const mySquad = () => S.me < 0 ? []
+  : S.picks.filter(p=>p.slot===S.me).map(p=>byId[p.id]).filter(Boolean);
 
 function needs(){
   const have = {GK:0,DEF:0,MID:0,FWD:0};
@@ -394,7 +395,8 @@ function render(){
   // log
   document.getElementById("log").innerHTML = S.picks.slice(-12).reverse().map((pk,k)=>{
     const p = byId[pk.id], idx = S.picks.length-k;
-    return `<div>${idx}. ${S.order[pk.slot]}${pk.slot===S.me?" (you)":""} — <b>${p.name}</b></div>`;
+    const nm = p ? p.name : `(unlisted #${pk.id})`;
+    return `<div>${idx}. ${S.order[pk.slot]}${pk.slot===S.me?" (you)":""} — <b>${nm}</b></div>`;
   }).join("") || "—";
 
   entry.disabled = done; if(!done) entry.focus();
@@ -466,10 +468,16 @@ async function poll(){
       drawMeSelect();
     }
 
-    S.picks = choices
-      .filter(c => byId[c.element])
-      .map(c => ({id:c.element, slot: S.order.indexOf(c.entry_name)}))
-      .filter(p => p.slot >= 0);
+    /* Count EVERY pick, even one whose player we cannot resolve. Dropping it
+       silently corrupts the pick count, and the pick count is what decides
+       whose turn it is — so one unknown player desynchronises the rest of the
+       draft. An unresolved id is still a slot consumed. */
+    let unknown = 0;
+    S.picks = choices.map(c => {
+      if(!byId[c.element]) unknown++;
+      return {id:c.element, slot: S.order.indexOf(c.entry_name)};
+    }).filter(p => p.slot >= 0);
+    if(unknown) setSyncStatus(`live · ${S.picks.length} picks (${unknown} unknown)`, "var(--warn)");
     S.started = true;
     syncFails = 0;
     save(); render();
