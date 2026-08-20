@@ -62,3 +62,24 @@ def fetch_game() -> dict:
     resp = httpx.get(f"{API_BASE}/game", headers=HEADERS, timeout=15)
     resp.raise_for_status()
     return resp.json()
+
+
+def fetch_element_status(league_id: int) -> dict:
+    """Live per-player ownership state: draft/{league}/choices.
+
+    Transaction-aware — reflects trades and waiver claims made after the
+    original draft, unlike `choices` in the same payload (which is only ever
+    the original draft-day pick order). Deliberately NOT cached: a waiver
+    decision needs today's ownership truth, not up-to-an-hour-old truth (see
+    the same choice in draft/serve.py's `_upstream`).
+    """
+    resp = httpx.get(f"{API_BASE}/draft/{league_id}/choices", headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_league_entries(league_id: int) -> dict:
+    """Managers in the league: league/{league_id}/details. Also not cached, same reasoning."""
+    resp = httpx.get(f"{API_BASE}/league/{league_id}/details", headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    return resp.json()

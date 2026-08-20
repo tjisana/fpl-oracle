@@ -207,14 +207,37 @@ budget as the binding constraint is positional scarcity.
 - [x] `draft/live.py` — the draft-room assistant
       (`uv run python -m fpl_oracle.draft.live --teams 10`). State saved after
       every pick so a dead terminal costs nothing.
+- [x] `draft/waivers.py` — in-season waiver-wire recommender
+      (`uv run python -m fpl_oracle.draft.waivers --league <id> --entry <id>`).
+      Draft-day "value" (vs. the league's last starter) is the wrong question
+      once you already own a specific 15-man squad — the only question that
+      matters is whether adding a free agent AND dropping one of your players
+      improves your best legal starting XI's total projected points, so
+      `best_xi()` brute-forces every legal formation (1 GK, 3-5 DEF, 2-5 MID,
+      1-3 FWD) and `evaluate_claim` diffs it before/after the swap. FPL Draft's
+      squad composition is fixed (2/5/5/3), so a legal claim can only ever be
+      a SAME-POSITION swap — `evaluate_claim` itself stays a generic
+      add/drop-any-pair function with no legality check, and `recommend_claims`
+      is the layer that restricts pairing to same-position free-agent/squad
+      pairs. `MIN_GAIN_WORTH_PRIORITY` (2.0 pts) is a named, surfaced threshold
+      rather than a silent cutoff, since a successful claim burns waiver
+      priority. `client.fetch_element_status`/`fetch_league_entries` (live
+      ownership + league roster) are deliberately NOT disk-cached, matching
+      `draft/serve.py`'s `_upstream` precedent — a waiver decision needs
+      today's ownership truth.
+- [ ] Form-awareness gap: `waivers.py` inherits `board.py`'s preseason
+      `draft_rank` → last-season-points-curve projection, which does not
+      update with in-season starts/minutes/scoring. A hot waiver target who
+      has been starting and scoring recently is therefore undervalued right
+      now — a known limitation, not something fixed in this pass.
 - [ ] ADP / average draft position. The single biggest remaining gap: without
       it the board cannot say "he will still be there next round", so it will
       have you reaching. Draft FC publish a global median pick derived from
       real drafts worldwide; not currently accessible to us.
 - [ ] Blend the creator-consensus machinery in properly once `consensus/` can
       score without price bands.
-- [ ] Waivers and in-season: draft leagues are H2H (3/1/0) with a waiver order
-      that starts as the reverse of the draft order.
+- [ ] In-season standings/H2H: draft leagues are H2H (3/1/0); waivers
+      themselves are now covered above.
 
 ## Phase 4 — Nuance + ship (days 6–7)
 - [ ] LLM nuance pass over solver output (flag concerns creators voiced)
