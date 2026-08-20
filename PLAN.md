@@ -173,6 +173,49 @@ unresolved-pick skip counting, EXCLUDED veto reaching the solver, relaxed-
 captaincy surfacing, graceful empty/missing `data/extractions/`) — all
 network-free via injected fake `PlayerDB`/registry.
 
+## Draft mode (added 2026-08-19, parallel track)
+
+Official FPL Draft is a DIFFERENT GAME, not a variant: selection without
+replacement, so every player is owned by exactly one manager in the league.
+`solver/` does not apply (no £100m budget — the ILP's whole reason to exist),
+`consensus/` does not apply as built (it normalises votes inside £1m price
+bands, exactly wrong when there are no prices), and there is no captain
+(`settings.squad.captains_disabled`) and no 3-per-club limit. What replaces the
+budget as the binding constraint is positional scarcity.
+
+- [x] `draft/client.py` — the draft API is a separate host with a separate
+      payload (`draft.premierleague.com/api/bootstrap-static`). Two fields make
+      the board possible: `draft_rank` (FPL's own forward-looking board) and,
+      preseason, a `total_points` that is still LAST season's final total.
+      `fetch_game()` exists to check `current_event is None`, because once the
+      season starts `total_points` silently becomes this season's running
+      tally and the projection would break without erroring.
+- [x] `draft/board.py` — value-based drafting. Two decisions verified against
+      live data before being committed: (1) the baseline is the last STARTER,
+      not the last rostered player — a 10-team league rosters 20 keepers, so a
+      replacement baseline lands on the 21st, a backup on ~20 points, which
+      inflates the best keeper to +142 and would have you drafting one in round
+      one; only 1 keeper starts, so the baseline is the 10th. (2) ORDER comes
+      from `draft_rank`, MAGNITUDE from last season's positional points curve —
+      ranking on raw last-season points buries anyone who missed time (Isak:
+      rank 5, 41 points, 694 minutes).
+- [x] `draft/expert_rankings.py` — published boards from the two creators who
+      actually cover draft format. Partial lists are correct by design: absence
+      from a top-20 is not a vote against a player. Names resolve against the
+      live pool and anything ambiguous is REPORTED, never guessed — this caught
+      "Palmer" matching both Cole (MID, rank 4) and Alex (GK, rank 570).
+- [x] `draft/live.py` — the draft-room assistant
+      (`uv run python -m fpl_oracle.draft.live --teams 10`). State saved after
+      every pick so a dead terminal costs nothing.
+- [ ] ADP / average draft position. The single biggest remaining gap: without
+      it the board cannot say "he will still be there next round", so it will
+      have you reaching. Draft FC publish a global median pick derived from
+      real drafts worldwide; not currently accessible to us.
+- [ ] Blend the creator-consensus machinery in properly once `consensus/` can
+      score without price bands.
+- [ ] Waivers and in-season: draft leagues are H2H (3/1/0) with a waiver order
+      that starts as the reverse of the draft order.
+
 ## Phase 4 — Nuance + ship (days 6–7)
 - [ ] LLM nuance pass over solver output (flag concerns creators voiced)
 - [ ] `report/gameweek.py`: markdown report — squad, captaincy section
