@@ -73,6 +73,18 @@
   <div class="clock" id="clock">Setup</div>
   <span class="pill" id="progress"></span>
   <span class="pill" id="baselines"></span>
+  <span class="pill">
+    league <input id="leagueId" size="7" placeholder="id"
+      style="width:70px;background:#0d1117;border:1px solid var(--line);color:var(--ink);
+             border-radius:4px;padding:1px 5px;font:inherit">
+    <button id="syncOn">sync</button><button id="syncOff">stop</button>
+    <b id="syncStatus" style="color:var(--dim)">off</b>
+  </span>
+  <span class="pill hide" id="mePill">
+    me <select id="meSelect"
+      style="background:#0d1117;border:1px solid var(--me);color:var(--me);
+             border-radius:4px;padding:1px 4px;font:inherit"></select>
+  </span>
   <span style="margin-left:auto"></span>
   <button id="undo">Undo</button>
   <button id="reset">Reset draft</button>
@@ -160,20 +172,23 @@
 </main>
 
 <script>
+const LEAGUE_ID = null;   // replaced by serve.py when --league is passed
 const PLAYERS = __PLAYERS__;
 const MANAGERS = __MANAGERS__;
-const TEAMS = MANAGERS.length;
+let TEAMS = MANAGERS.length;   // corrected from the API when syncing
 const BASELINES = __BASELINES__;
 const ROSTER = {GK:2, DEF:5, MID:5, FWD:3};
 const SQUAD_SIZE = 15;
 const KEY = "fpl-draft-state-v1";
 
+const MY_TEAM = (MANAGERS.find(m=>m.me)||{}).team;
 const byId = Object.fromEntries(PLAYERS.map(p => [p.id, p]));
 let S = load();
 
 function load(){
   try{ const r = JSON.parse(localStorage.getItem(KEY)); if(r && r.picks) return r; }catch(e){}
-  return {started:false, order:MANAGERS.map(m=>m.team), me:MANAGERS.findIndex(m=>m.me), picks:[]};
+  return {started:false, order:MANAGERS.map(m=>m.team),
+          me:MANAGERS.findIndex(m=>m.me), picks:[], leagueId:null};
 }
 /* Persistence is a convenience, never a dependency: private browsing and
    sandboxed contexts throw on localStorage, and losing the draft to a storage
@@ -201,7 +216,7 @@ function slotFor(pickIndex){
 }
 const takenIds = () => new Set(S.picks.map(p=>p.id));
 const available = () => { const t = takenIds(); return PLAYERS.filter(p=>!t.has(p.id)); };
-const mySquad = () => S.picks.filter(p=>p.slot===S.me).map(p=>byId[p.id]);
+const mySquad = () => S.me < 0 ? [] : S.picks.filter(p=>p.slot===S.me).map(p=>byId[p.id]);
 
 function needs(){
   const have = {GK:0,DEF:0,MID:0,FWD:0};
@@ -393,6 +408,104 @@ function move(i,d){
   save(); renderSetup();
 }
 
+/* ---------- live sync with the real draft room ----------
+   The official API publishes a league's picks with no authentication. It sends
+   no CORS header, so serve.py re-exposes it on this origin. When sync is on the
+   API is AUTHORITATIVE: picks are rebuilt from it every poll, which means a
+   refresh is harmless and manual entry can never drift out of step. */
+let syncTimer = null, syncFails = 0;
+
+function setSyncStatus(text, colour){
+  const el = document.getElementById("syncStatus");
+  if(el){ el.textContent = text; el.style.color = colour; }
+}
+
+async function poll(){
+  const id = S.leagueId;
+  if(!id) return;
+  try{
+    const r = await fetch(`/api/picks?league=${id}`, {cache:"no-store"});
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+
+    const choices = (d.choices||[]).slice().sort((a,b)=>a.index-b.index);
+
+    /* Derive the draft order from round 1 rather than asking for it: the
+       order teams pick in the first round IS the order. Any team not yet seen
+       is appended as it appears, so this is correct mid-round too. */
+    const order = choices.filter(c=>c.round===1).map(c=>c.entry_name);
+    choices.forEach(c=>{ if(!order.includes(c.entry_name)) order.push(c.entry_name); });
+    if(order.length){
+      S.order = order;
+      const mine = order.indexOf(MY_TEAM);
+      if(mine >= 0){
+        S.me = mine; S.meConfirmed = true;
+      }else if(!S.meConfirmed){
+        /* The configured team name is not in this league. Guessing would give
+           recommendations for somebody else's squad, so ask instead. */
+        S.me = -1;
+      }
+      drawMeSelect();
+    }
+
+    S.picks = choices
+      .filter(c => byId[c.element])
+      .map(c => ({id:c.element, slot: S.order.indexOf(c.entry_name)}))
+      .filter(p => p.slot >= 0);
+    S.started = true;
+    syncFails = 0;
+    save(); render();
+    setSyncStatus(`live · ${S.picks.length} picks`, "var(--good)");
+  }catch(e){
+    syncFails++;
+    setSyncStatus(`retrying (${syncFails}) — ${e.message}`, "var(--warn)");
+  }
+}
+
+function drawMeSelect(){
+  const pill = document.getElementById("mePill"), sel = document.getElementById("meSelect");
+  if(!S.order.length){ pill.classList.add("hide"); return; }
+  pill.classList.remove("hide");
+  if(sel.options.length !== S.order.length || sel.dataset.sig !== S.order.join("|")){
+    sel.dataset.sig = S.order.join("|");
+    sel.innerHTML = `<option value="-1">— pick your team —</option>` +
+      S.order.map((t,i)=>`<option value="${i}">${t}</option>`).join("");
+  }
+  sel.value = String(S.me);
+  pill.style.borderColor = S.me < 0 ? "var(--bad)" : "var(--line)";
+}
+document.getElementById("meSelect").onchange = e => {
+  S.me = +e.target.value; S.meConfirmed = S.me >= 0; save(); render();
+};
+
+async function startSync(id){
+  S.leagueId = id; save();
+  /* Team count drives the snake, so take it from the league itself rather
+     than assuming the hardcoded roster is the league being synced. */
+  try{
+    const r = await fetch(`/api/league?league=${id}`, {cache:"no-store"});
+    const d = await r.json();
+    if(Array.isArray(d.league_entries) && d.league_entries.length){
+      TEAMS = d.league_entries.length;
+    }
+  }catch(e){ /* non-fatal: fall back to the configured count */ }
+  if(syncTimer) clearInterval(syncTimer);
+  poll();
+  syncTimer = setInterval(poll, 4000);
+}
+function stopSync(){
+  if(syncTimer) clearInterval(syncTimer);
+  syncTimer = null; S.leagueId = null; save();
+  setSyncStatus("off — entering picks manually", "var(--dim)");
+  render();
+}
+
+document.getElementById("syncOn").onclick = ()=>{
+  const v = document.getElementById("leagueId").value.trim();
+  if(/^\d+$/.test(v)) startSync(+v); else setSyncStatus("league id must be a number","var(--bad)");
+};
+document.getElementById("syncOff").onclick = stopSync;
+
 document.getElementById("start").onclick = ()=>{ S.started=true; save(); render(); };
 document.getElementById("undo").onclick = ()=>{ S.picks.pop(); save(); render(); };
 document.getElementById("reset").onclick = ()=>{
@@ -405,5 +518,12 @@ document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("[data-f]").forEach(x=>x.className="");
   b.className="p"; render();
 });
+
+/* Boot: prefer the id baked in by serve.py, else whatever we synced with last. */
+const bootLeague = LEAGUE_ID || S.leagueId;
+if(bootLeague){
+  document.getElementById("leagueId").value = bootLeague;
+  startSync(bootLeague);
+}
 render();
 </script>
