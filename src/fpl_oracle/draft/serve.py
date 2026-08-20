@@ -153,8 +153,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         Handler.sim.start()
         # The page must poll this server, not the real league.
-        html = html.replace("const LEAGUE_ID = null;", "const LEAGUE_ID = 0;")
-        html = html.replace(f"const LEAGUE_ID = {args.league};", "const LEAGUE_ID = 0;")
+        # A string sentinel, not 0: the page has several truthiness checks on
+        # the league id, and 0 is falsy. The sim branch in do_GET runs before
+        # the numeric validation, so a non-numeric id is fine here.
+        html = html.replace("const LEAGUE_ID = null;", 'const LEAGUE_ID = "practice";')
+        html = html.replace(f"const LEAGUE_ID = {args.league};", 'const LEAGUE_ID = "practice";')
         html = html.replace("const SIM_MODE = false;", "const SIM_MODE = true;")
         print(f"PRACTICE DRAFT — bots pick every {args.pick_seconds}s and stop on your turn ({me})")
         print("  order: " + " > ".join(Handler.sim.order))

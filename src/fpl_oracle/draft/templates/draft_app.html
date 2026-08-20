@@ -549,7 +549,7 @@ document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{
 /* Boot: prefer the id baked in by serve.py, else whatever we synced with last. */
 // 0 is a valid injected id (practice mode), so test for null explicitly
 const bootLeague = (LEAGUE_ID !== null) ? LEAGUE_ID : S.leagueId;
-if(bootLeague){
+if(bootLeague !== null && bootLeague !== undefined){
   document.getElementById("leagueId").value = bootLeague;
   startSync(bootLeague);
 }
