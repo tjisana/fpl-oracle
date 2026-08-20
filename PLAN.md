@@ -143,7 +143,7 @@ Deadline: GW1, ~1 week out. Ship draft mode first; weekly pipeline evolves after
       no creator support; with it on, 15/15 — 10 of 15 members change.
 - [x] First full squad output — produced 2026-08-19: £100.0m exactly, 3-4-3,
       B.Fernandes (C) / Haaland (VC), XI £83.5m / bench £16.5m (minimum legal).
-- [ ] Single pipeline entry point + run log (see Auditing note below)
+- [x] Single pipeline entry point + run log (see Auditing note below)
 
 ### Auditing (gap found 2026-08-19)
 Provenance is strong — every squad player traces back through
@@ -152,6 +152,26 @@ transcript, and `PlayerScore.votes` retains which creator voted, with what weigh
 action and conviction. What's MISSING is a run record: nothing ties a shipped squad
 to the inputs and code version that produced it, and a re-run silently overwrites.
 Build before the deadline-morning rerun so that rerun is trustworthy.
+
+**RESOLVED 2026-08-19/20**: `src/fpl_oracle/pipeline.py` —
+`uv run python -m fpl_oracle.pipeline` runs stored extractions -> availability
+filter -> consensus -> captaincy election -> solver in one command, writing
+`data/runs/{run_id}/{run.json,squad.json}` (`run_id` = UTC timestamp + short
+git SHA, with a numeric-suffix fallback so a same-second rerun still can't
+collide) plus a `data/runs/latest.json` pointer. `run.json` (`RunRecord`)
+records git commit/branch/dirty, every consumed extraction file's path +
+sha256, the creator weights actually used, every EXCLUDED player + reason,
+load/pick/pool counts, and the solver outcome (cost, formation, captain,
+vice-captain, whether the >=2 captaincy guarantee was relaxed). Captain/vice
+are picked in the pipeline layer (not the solver) from the captaincy
+election's ranking filtered to who actually made the squad — a reporting
+decision, no solver/consensus logic changed. Verified end-to-end against the
+live 14-creator extraction set: reproduces the prior manually-verified
+output exactly (£100.0m, 3-4-3, B.Fernandes (C) / Haaland (VC)). Tests in
+`tests/test_pipeline.py` (run_id uniqueness/no-overwrite, input sha256,
+unresolved-pick skip counting, EXCLUDED veto reaching the solver, relaxed-
+captaincy surfacing, graceful empty/missing `data/extractions/`) — all
+network-free via injected fake `PlayerDB`/registry.
 
 ## Phase 4 — Nuance + ship (days 6–7)
 - [ ] LLM nuance pass over solver output (flag concerns creators voiced)
