@@ -414,6 +414,7 @@ function move(i,d){
    API is AUTHORITATIVE: picks are rebuilt from it every poll, which means a
    refresh is harmless and manual entry can never drift out of step. */
 let syncTimer = null, syncFails = 0;
+let ENTRIES = [];   // every team in the synced league, from /api/league
 
 function setSyncStatus(text, colour){
   const el = document.getElementById("syncStatus");
@@ -435,6 +436,9 @@ async function poll(){
        is appended as it appears, so this is correct mid-round too. */
     const order = choices.filter(c=>c.round===1).map(c=>c.entry_name);
     choices.forEach(c=>{ if(!order.includes(c.entry_name)) order.push(c.entry_name); });
+    // Teams yet to make their first pick keep a provisional slot at the back,
+    // so every team — including mine — is always locatable.
+    ENTRIES.forEach(t=>{ if(!order.includes(t)) order.push(t); });
     if(order.length){
       S.order = order;
       const mine = order.indexOf(MY_TEAM);
@@ -487,6 +491,15 @@ async function startSync(id){
     const d = await r.json();
     if(Array.isArray(d.league_entries) && d.league_entries.length){
       TEAMS = d.league_entries.length;
+      ENTRIES = d.league_entries.map(e=>e.entry_name);
+      /* Seed the order NOW. The real snake order is only knowable once round 1
+         starts, but without this the app cannot identify which team is mine
+         until I have already picked — and it would miss telling me my first
+         pick is up, which is the one moment it most needs to. */
+      if(!S.picks.length) S.order = ENTRIES.slice();
+      const mine = S.order.indexOf(MY_TEAM);
+      if(mine >= 0){ S.me = mine; S.meConfirmed = true; }
+      drawMeSelect(); render();
     }
   }catch(e){ /* non-fatal: fall back to the configured count */ }
   if(syncTimer) clearInterval(syncTimer);
