@@ -89,11 +89,21 @@ class _WireExtraction(BaseModel):
     picks: list[_WirePick]
 
 
+# The SDK defaults (read timeout 600s, max_retries=2) compound badly here:
+# 3 validation attempts x 3 HTTP attempts x 600s is 90 minutes on ONE
+# creator, and `run_extraction` walks ~18 of them sequentially against a
+# hard deadline wall. A GW1 reveal extraction that hasn't answered in three
+# minutes is not going to; failing fast lets the next creator run, and
+# per-creator failures are already non-fatal.
+REQUEST_TIMEOUT_SECONDS = 180.0
+MAX_HTTP_RETRIES = 1
+
+
 def _get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
         load_dotenv()
-        _client = anthropic.Anthropic()
+        _client = anthropic.Anthropic(timeout=REQUEST_TIMEOUT_SECONDS, max_retries=MAX_HTTP_RETRIES)
     return _client
 
 

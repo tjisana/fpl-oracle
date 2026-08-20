@@ -129,3 +129,43 @@ class TestRequiredOptions:
         assert required_options(single) == 1
         none = elect({"a": [(1, INC, 5)]}, {"a": 0.4})
         assert required_options(none) == 0
+
+
+class TestOneArmbandPerCreator:
+    """A creator has ONE captain. Naming several is one opinion recorded
+    several times — not several opinions. The earlier implementation
+    deduped per player then summed across players, so a creator naming two
+    captains funded both at full weight and appeared in the `voters` count
+    for each."""
+
+    def test_creator_naming_two_captains_funds_only_the_strongest(self) -> None:
+        picks = {
+            "andy": [
+                (1, PickAction.CAPTAIN, 5),
+                (2, PickAction.CAPTAIN, 2),
+            ]
+        }
+        election = elect(picks, {"andy": 1.0})
+
+        scored = {c.player_id: c for c in election.candidates}
+        assert 1 in scored, "the strongest armband pick must survive"
+        assert 2 not in scored, "the weaker rival must not also be funded"
+        assert scored[1].voters == 1
+        assert election.total_voters == 1
+
+    def test_a_captain_pick_outranks_that_creators_own_vice_pick(self) -> None:
+        picks = {"andy": [(1, PickAction.VICE, 5), (2, PickAction.CAPTAIN, 5)]}
+        election = elect(picks, {"andy": 1.0})
+
+        ids = [c.player_id for c in election.candidates]
+        assert ids == [2], "a vice is a second choice, not a second vote"
+
+    def test_distinct_creators_still_accumulate_normally(self) -> None:
+        picks = {
+            "andy": [(1, PickAction.CAPTAIN, 5)],
+            "focal": [(1, PickAction.CAPTAIN, 5)],
+        }
+        election = elect(picks, {"andy": 1.0, "focal": 1.0})
+
+        assert election.candidates[0].voters == 2
+        assert election.total_voters == 2

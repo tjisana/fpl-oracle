@@ -21,6 +21,14 @@ squad. Two guards on that list, both learned from the live data:
   mode is "no squad at all on deadline morning", which is the worst
   outcome this project has.
 
+ONE ARMBAND PER CREATOR: a creator gets one captaincy vote, however
+many names they float. `elect` keeps their single strongest armband
+signal (a captain pick always beating their own vice pick). An earlier
+version deduped only per-player and then summed across players, so a
+creator naming two captains funded both at full weight and counted as a
+voter for each — real on the first live data, and the `voters` column
+read as more independent evidence than existed.
+
 THIN EVIDENCE WARNING: only 8 of ~14 creators' armbands were captured in
 the first run. `CaptaincyElection.thin` says so, and the report must
 surface it — the deadline-morning re-extraction matters more here than
@@ -88,8 +96,15 @@ def elect(
 
     for creator_id, picks in picks_by_creator.items():
         weight = creator_weights.get(creator_id, 0.0)
-        # one captain and one vice per creator: if a creator names several
-        # (they change their mind mid-video), the strongest survives
+        # ONE ARMBAND PER CREATOR. A creator has one captain, so naming
+        # several (changing their mind mid-video, or discussing options
+        # aloud) is one opinion recorded several times, not several
+        # opinions. Keying only by player — the earlier bug here — deduped
+        # repeat mentions of the SAME player but then added every distinct
+        # player at full weight, so one creator could hand their entire
+        # weight to two rival captains at once and appear in the `voters`
+        # count for both. On the first live data that inflated a candidate
+        # list with names nobody had really argued for.
         best: dict[int, float] = {}
         for player_id, action, conviction in picks:
             if action is PickAction.CAPTAIN:
@@ -99,7 +114,12 @@ def elect(
             else:
                 continue
             best[player_id] = max(best.get(player_id, 0.0), value)
-        for player_id, value in best.items():
+        if best:
+            # The strongest single armband signal survives. A captain pick
+            # always outranks a vice pick from the same creator (VICE_VALUE
+            # < 1), which is the intended ordering: a vice is a second
+            # choice, not a second vote.
+            player_id, value = max(best.items(), key=lambda kv: (kv[1], -kv[0]))
             scores[player_id] += value
             voters[player_id].add(creator_id)
 

@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fpl_oracle.extract.extractor import ExtractionError, extract_picks
 from fpl_oracle.extract.schemas import VideoExtraction
@@ -127,10 +127,18 @@ def resolve_extraction(extraction: VideoExtraction, db: PlayerDB) -> ResolvedExt
     )
 
 
-def pick_gw1_video(creator: Creator, registry: list[Creator]) -> VideoInfo | None:
-    """Most recent GW1-team-titled, non-Short video attributed to `creator`."""
+def pick_gw1_video(
+    creator: Creator, registry: list[Creator], force_refresh: bool = False
+) -> VideoInfo | None:
+    """Most recent GW1-team-titled, non-Short video attributed to `creator`.
+
+    `force_refresh` bypasses the uploads-listing cache — see
+    `list_recent_videos`. Needed on deadline morning, when the video that
+    matters may have been posted since the cache was written."""
     assert creator.channel_id is not None
-    videos = list_recent_videos(creator.channel_id, max_results=VIDEOS_PER_CHANNEL)
+    videos = list_recent_videos(
+        creator.channel_id, max_results=VIDEOS_PER_CHANNEL, force_refresh=force_refresh
+    )
     co_creators = [
         c
         for c in registry
@@ -180,13 +188,45 @@ def render_match_quality(resolved: list[ResolvedExtraction]) -> str:
     return "\n".join(lines)
 
 
+class ExtractionRunSummary(BaseModel):
+    """The outcome of one `run_extraction`, not just where it wrote the
+    report.
+
+    Per-creator failures are non-fatal by design — one creator's missing
+    video must not cost the other seventeen. But that means a run in which
+    EVERY creator failed returns just as quietly as a perfect one, and a
+    caller that treats "no exception raised" as success (the deadline-
+    morning chain did) goes on to solve whatever extractions happen to be
+    on disk — yesterday's. The counts are the only thing that can tell
+    those two runs apart, so they are returned rather than merely logged.
+    """
+
+    report_path: Path
+    attempted: int = Field(description="creators this run tried to extract")
+    succeeded: int = Field(description="creators that produced a stored extraction")
+    failures: list[tuple[str, str]] = Field(
+        default_factory=list, description="(creator_id, reason) for each creator that produced none"
+    )
+
+    @property
+    def failed(self) -> int:
+        return len(self.failures)
+
+
 def run_extraction(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     creator_ids: list[str] | None = None,
-) -> Path:
+    force_refresh: bool = False,
+) -> ExtractionRunSummary:
     """Extract + resolve across all eligible creators' GW1 videos. Per-video
-    failures are non-fatal and listed in the report."""
-    db = PlayerDB.load()
+    failures are non-fatal and listed in the report; the returned
+    `ExtractionRunSummary` carries the counts so a caller can tell a
+    healthy run from one where nothing worked.
+
+    `force_refresh` bypasses BOTH stale caches on the deadline-morning
+    path: the YouTube uploads listing (so a video posted an hour ago is
+    visible) and the FPL player DB that names resolve against."""
+    db = PlayerDB.load(force_refresh=force_refresh)
     creators = eligible_creators(REGISTRY)
     if creator_ids is not None:
         known = {c.creator_id for c in creators}
@@ -206,7 +246,7 @@ def run_extraction(
     try:
         for creator in creators:
             try:
-                video = pick_gw1_video(creator, REGISTRY)
+                video = pick_gw1_video(creator, REGISTRY, force_refresh=force_refresh)
             except YouTubeApiError as e:
                 logger.warning("run_extract: %s — video listing failed: %s", creator.creator_id, e)
                 failures.append((creator.creator_id, f"video listing failed: {e}"))
@@ -252,7 +292,12 @@ def run_extraction(
                 + "\n"
             )
         report_path.write_text(report)
-    return report_path
+    return ExtractionRunSummary(
+        report_path=report_path,
+        attempted=len(creators),
+        succeeded=len(resolved),
+        failures=failures,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -263,9 +308,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    path = run_extraction(creator_ids=args.creator_ids or None)
-    print(f"match-quality report written to {path}")
-    return 0
+    summary = run_extraction(creator_ids=args.creator_ids or None)
+    print(
+        f"extracted {summary.succeeded}/{summary.attempted} creators "
+        f"({summary.failed} produced nothing)"
+    )
+    print(f"match-quality report written to {summary.report_path}")
+    return 0 if summary.succeeded else 1
 
 
 if __name__ == "__main__":

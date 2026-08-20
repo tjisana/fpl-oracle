@@ -240,10 +240,68 @@ budget as the binding constraint is positional scarcity.
       themselves are now covered above.
 
 ## Phase 4 — Nuance + ship (days 6–7)
-- [ ] LLM nuance pass over solver output (flag concerns creators voiced)
-- [ ] `report/gameweek.py`: markdown report — squad, captaincy section
-      (own consensus + dissent), reasoning, per-pick dissent notes
-- [ ] Deadline-morning rerun: refresh videos + availability flags, re-extract, re-solve
+- [x] LLM nuance pass over solver output — `report/nuance.py` +
+      `report/prompts/nuance_pass.txt` + `report/models.py` (the shared
+      Concern/PlayerNuance/SquadNuance/NuanceRecord contract). The model is given ONLY
+      the creators' own `reasoning` strings — no stats, no fixtures — so it reports
+      what was said rather than opining; letting it analyse would smuggle an LLM's own
+      football take into the last step wearing the creators' clothes. ATTRIBUTION IS
+      MECHANICAL: a concern naming a creator who never voted on that player is stripped
+      by `validate_nuance()`, and a concern left with no valid attribution is dropped
+      entirely (an unattributed caveat is indistinguishable from the model's own
+      opinion); drops are counted in `nuance.json`. The PROSE is not checked — that is a
+      prompt-level constraint only, stated plainly in the docstrings and disclosed at
+      the head of the report's Nuance section. Never raises: the squad is already solved
+      when this runs, so a failure returns `failed=True` and the report renders without
+      it. OPT-IN everywhere except `deadline.py`.
+- [x] `report/gameweek.py`: markdown report — pure and deterministic (no clock, no
+      network, no IO), so two runs are diffable. Sections: squad diff vs the previous
+      run, availability callout, XI/bench tables, captaincy (with the mandatory
+      thin-evidence and relaxed-constraint disclosures), per-player creator reasoning,
+      MECHANICAL dissent, nuance, availability vetoes, evidence quality, provenance.
+      Two subtleties worth remembering: (1) excluded players structurally never appear
+      in `scores` (scoring runs on the post-veto pool), so backer counts for vetoed
+      players are re-derived from the extractions with the same one-vote-per-creator
+      arithmetic — otherwise that section is silently empty forever; (2) participation
+      is measured against `ingest.eligible_creators`, not the roster, because the FPL
+      Wire co-hosts are deliberately never ingested alone and counting them as
+      non-contributors reports the intended architecture as a failure.
+- [x] Deadline-morning rerun — `deadline.py` (`--dry-run` first, always) chaining
+      ingest -> extract -> `run_pipeline(force_refresh=True)` -> nuance -> report, plus
+      `docs/deadline-runbook.md`. `force_refresh` bypasses BOTH stale caches: the FPL
+      bootstrap (availability flags move in the last hours) and the YouTube uploads
+      listing (an 08:00 run must see a 07:30 team reveal). REMAINING (operational, owner's
+      call — costs ~18 Claude extraction calls + 1 nuance call): the live run itself.
+
+### Phase 4 defects found by review and fixed (2026-08-20)
+Two fresh-context reviews (correctness + an adversarial "what breaks at 8am") found ten
+issues, all fixed and tested. The ones worth remembering:
+- **A creator's old AND new video both counted.** `data/extractions/` is keyed by
+  video_id and append-only, and picks fan in by CREATOR — so a creator who posts a final
+  reveal on deadline morning was loaded twice, and since scoring keeps the STRONGEST vote
+  per (creator, player), a player he had just dropped kept his full-strength earlier vote.
+  The rerun's whole purpose, inverted. Fixed by `pipeline._latest_per_creator` (newest
+  video per creator wins; superseded files recorded in the run record, never deleted).
+- **Extraction could fail for every creator and still report success**, after which the
+  solve ran on yesterday's extractions and produced a normal-looking squad. `run_extraction`
+  now returns an `ExtractionRunSummary`; zero successes is fatal, below half warns.
+- **Captaincy double-count** (`consensus/captaincy.py`): a creator naming two captains
+  funded both at full weight and counted as a voter for each, contradicting the module's
+  own docstring. Now one armband per creator. Verified squad-neutral on the live data
+  (same 15, same XI, same C/VC) — it only removed two phantom 4%-share candidates.
+- **Captain could land on a benched player** — the armband simply thrown away. Captain/vice
+  are now ranked within the starting XI, falling back to the squad only if the election put
+  nobody in the XI.
+- `deadline.py` configured no logging, so every per-creator progress line was dropped;
+  Anthropic calls had a 90-minute worst case per creator against a hard deadline wall; a
+  single FPL API blip killed the solve with no retry; a corrupt previous run aborted
+  everything before stage 1 over a cosmetic diff; and a crash after success hid the
+  already-written report. All fixed.
+- The report now stamps DATA FRESHNESS (bootstrap fetch time + source-video date range +
+  per-input publish dates) — without it, a report built on week-old videos is byte-shaped
+  identically to one built on this morning's, which is what made the staleness bugs above
+  invisible to the person reading the output. DOUBTFUL players (discounted, not vetoed —
+  they legally reach the XI) are now surfaced in the tables and called out up top.
 
 ## Later (post-GW1)
 - Weekly transfer recommender aware of my actual squad/budget/free transfers

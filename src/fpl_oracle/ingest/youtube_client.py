@@ -227,7 +227,9 @@ def _get_uploads_playlist_id(channel_id: str) -> str | None:
     return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
 
-def list_recent_videos(channel_id: str, max_results: int = 10) -> list[VideoInfo]:
+def list_recent_videos(
+    channel_id: str, max_results: int = 10, force_refresh: bool = False
+) -> list[VideoInfo]:
     """List a channel's most recent uploads, newest first.
 
     Resolves the channel's uploads playlist (cached indefinitely — the
@@ -237,6 +239,13 @@ def list_recent_videos(channel_id: str, max_results: int = 10) -> list[VideoInfo
     cache file older than 6 hours is treated as a miss and refetched.
     This staleness rule is specific to this function, not the shared
     cache helpers.
+
+    `force_refresh` bypasses that 6-hour window entirely. Six hours is
+    fine on an ordinary day and precisely wrong on a deadline morning:
+    team-reveal videos land in the last few hours before the deadline, so
+    a run at 08:00 that reuses a 06:00 listing cannot see the video the
+    creator posted at 07:30 — and would quietly extract yesterday's team
+    instead. Costs one YouTube quota unit per channel; no LLM cost.
     """
     playlist_id = _get_uploads_playlist_id(channel_id)
     if playlist_id is None:
@@ -244,7 +253,8 @@ def list_recent_videos(channel_id: str, max_results: int = 10) -> list[VideoInfo
 
     cache_path = _cache_path("uploads", channel_id)
     cache_is_fresh = (
-        cache_path.exists()
+        not force_refresh
+        and cache_path.exists()
         and (time.time() - cache_path.stat().st_mtime) < _UPLOADS_CACHE_MAX_AGE_SECONDS
     )
     cached = _read_cache(cache_path) if cache_is_fresh else None

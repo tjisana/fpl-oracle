@@ -434,8 +434,15 @@ class PlayerDB:
         )
 
     @classmethod
-    def load(cls) -> PlayerDB:
-        return cls.from_bootstrap(get_bootstrap_static())
+    def load(cls, force_refresh: bool = False) -> PlayerDB:
+        """Load from the live bootstrap-static payload. `force_refresh`
+        passes straight through to `fpl.client.get_bootstrap_static` —
+        bypassing its 6h-fresh cache so a deadline-morning rerun sees
+        availability flags that moved in the last few hours, not a stale
+        cache. Default (`force_refresh=False`) is unchanged: every
+        existing caller keeps reading the 6h-fresh cache exactly as
+        before."""
+        return cls.from_bootstrap(get_bootstrap_static(force_refresh=force_refresh))
 
     def get(self, player_id: int) -> Player | None:
         return self._players.get(player_id)
