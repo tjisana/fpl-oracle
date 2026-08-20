@@ -1,0 +1,409 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FPL Draft — Third Kit</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --line:#262c35; --ink:#e8edf3; --dim:#8b96a5;
+    --good:#3fb950; --warn:#d29922; --bad:#f85149; --acc:#58a6ff; --me:#a371f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{position:sticky;top:0;z-index:20;background:var(--panel);
+         border-bottom:1px solid var(--line);padding:10px 14px;
+         display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .clock{font-size:20px;font-weight:700}
+  .clock.mine{color:var(--me)}
+  .pill{background:#0d1117;border:1px solid var(--line);border-radius:99px;
+        padding:3px 10px;color:var(--dim);font-size:12px}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;padding:14px;
+       align-items:start}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+        padding:12px;margin-bottom:14px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+     margin:0 0 9px}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:11px;color:var(--dim);font-weight:600;
+     padding:4px 6px;border-bottom:1px solid var(--line)}
+  td{padding:5px 6px;border-bottom:1px solid #1d232b}
+  tr.gone{opacity:.28;text-decoration:line-through}
+  tr.full td{opacity:.4}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .pos{display:inline-block;width:34px;text-align:center;border-radius:3px;
+       font-size:11px;padding:1px 0}
+  .GK{background:#3d2f00;color:#e3b341}.DEF{background:#0b2f1a;color:#56d364}
+  .MID{background:#0c2d48;color:#79c0ff}.FWD{background:#3d1420;color:#ff7b72}
+  .cliff{color:var(--bad);font-weight:700}
+  .flag{color:var(--bad);font-size:11px}
+  #entry{width:100%;font:16px ui-monospace,monospace;padding:11px 12px;
+         background:#0d1117;border:2px solid var(--acc);border-radius:6px;color:var(--ink)}
+  #entry:focus{outline:none;border-color:var(--me)}
+  .ac{position:relative}
+  #suggest{position:absolute;left:0;right:0;top:100%;z-index:30;background:#0d1117;
+           border:1px solid var(--line);border-radius:0 0 6px 6px;max-height:270px;
+           overflow:auto;display:none}
+  #suggest div{padding:7px 10px;cursor:pointer;display:flex;gap:8px;align-items:center}
+  #suggest div.sel{background:#1f6feb33}
+  #suggest .r{margin-left:auto;color:var(--dim);font-size:12px}
+  button{background:#21262d;border:1px solid var(--line);color:var(--ink);
+         border-radius:6px;padding:6px 11px;cursor:pointer;font:inherit}
+  button:hover{border-color:var(--acc)}
+  button.p{background:var(--acc);color:#04101f;border-color:var(--acc);font-weight:700}
+  .rec{display:flex;gap:9px;padding:8px;border-bottom:1px solid #1d232b;align-items:baseline}
+  .rec:first-child{background:#1f6feb1a;border-radius:6px}
+  .rec b{font-size:15px}
+  .why{color:var(--dim);font-size:11px;margin-left:auto;text-align:right}
+  .bar{height:5px;background:#0d1117;border-radius:3px;overflow:hidden;margin-top:3px}
+  .bar i{display:block;height:100%}
+  .order{display:flex;flex-direction:column;gap:4px}
+  .order div{display:flex;gap:8px;align-items:center;padding:5px 8px;background:#0d1117;
+             border:1px solid var(--line);border-radius:5px;font-size:13px}
+  .order div.me{border-color:var(--me);color:var(--me)}
+  .order .n{color:var(--dim);width:22px}
+  .order .sp{margin-left:auto;display:flex;gap:3px}
+  .hide{display:none}
+  .muted{color:var(--dim)}
+  .warnbox{background:#3d1420;border:1px solid var(--bad);border-radius:6px;padding:8px;
+           margin-bottom:10px;font-size:12px}
+</style>
+
+<header>
+  <div class="clock" id="clock">Setup</div>
+  <span class="pill" id="progress"></span>
+  <span class="pill" id="baselines"></span>
+  <span style="margin-left:auto"></span>
+  <button id="undo">Undo</button>
+  <button id="reset">Reset draft</button>
+</header>
+
+<!-- ---------- SETUP ---------- -->
+<main id="setup">
+  <div>
+    <div class="card">
+      <h2>Draft order — drag with the arrows, mark yourself</h2>
+      <p class="muted" style="margin:0 0 10px">
+        Snake order: round 1 runs top to bottom, round 2 reverses, and so on.
+        If you don't know the order yet, just start — only the pick sequence
+        depends on it, not the recommendations.
+      </p>
+      <div class="order" id="orderList"></div>
+      <p style="margin-top:12px">
+        <button class="p" id="start">Start draft</button>
+      </p>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>How it works</h2>
+      <p class="muted">
+        Type every pick as it happens — yours and everyone else's. The board
+        only knows what you tell it. Autocomplete matches on any part of the
+        name, so a surname is enough; Enter takes the highlighted row.
+      </p>
+      <p class="muted">
+        <b>VALUE</b> is projected points minus the last <i>starter</i> at that
+        position — what the player is worth over the man you'd otherwise field.
+        <b>VONA</b> is the drop to the next player at his position: high means
+        passing now is expensive.
+      </p>
+    </div>
+  </div>
+</main>
+
+<!-- ---------- DRAFT ---------- -->
+<main id="draft" class="hide">
+  <div>
+    <div class="card">
+      <h2 id="entryLabel">Record the pick</h2>
+      <div class="ac">
+        <input id="entry" autocomplete="off" spellcheck="false"
+               placeholder="Type a player name, then Enter">
+        <div id="suggest"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Best available
+        <span style="float:right">
+          <button data-f="ALL" class="p">All</button>
+          <button data-f="GK">GK</button><button data-f="DEF">DEF</button>
+          <button data-f="MID">MID</button><button data-f="FWD">FWD</button>
+        </span>
+      </h2>
+      <table><thead><tr>
+        <th>#</th><th>Player</th><th>Pos</th><th>Tm</th>
+        <th class="num">Proj</th><th class="num">Value</th><th class="num">VONA</th><th class="num">Tier</th>
+      </tr></thead><tbody id="boardBody"></tbody></table>
+    </div>
+  </div>
+
+  <div>
+    <div class="card" id="recCard">
+      <h2>Take next</h2>
+      <div id="recs"></div>
+    </div>
+    <div class="card">
+      <h2>Scarcity — startable players left</h2>
+      <div id="scarcity"></div>
+    </div>
+    <div class="card">
+      <h2>My squad — <span id="squadCount"></span></h2>
+      <div id="squad"></div>
+    </div>
+    <div class="card">
+      <h2>Recent picks</h2>
+      <div id="log" class="muted"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const PLAYERS = __PLAYERS__;
+const MANAGERS = __MANAGERS__;
+const TEAMS = MANAGERS.length;
+const BASELINES = __BASELINES__;
+const ROSTER = {GK:2, DEF:5, MID:5, FWD:3};
+const SQUAD_SIZE = 15;
+const KEY = "fpl-draft-state-v1";
+
+const byId = Object.fromEntries(PLAYERS.map(p => [p.id, p]));
+let S = load();
+
+function load(){
+  try{ const r = JSON.parse(localStorage.getItem(KEY)); if(r && r.picks) return r; }catch(e){}
+  return {started:false, order:MANAGERS.map(m=>m.team), me:MANAGERS.findIndex(m=>m.me), picks:[]};
+}
+/* Persistence is a convenience, never a dependency: private browsing and
+   sandboxed contexts throw on localStorage, and losing the draft to a storage
+   error would be far worse than losing the ability to resume after a refresh. */
+let storageWarned = false;
+function save(){
+  try{ localStorage.setItem(KEY, JSON.stringify(S)); }
+  catch(e){
+    if(!storageWarned){
+      storageWarned = true;
+      const b = document.createElement("div");
+      b.className = "warnbox";
+      b.textContent = "Storage unavailable — the draft still works, but a page "
+                    + "refresh will lose your picks. Do not reload.";
+      document.querySelector("#draft > div").prepend(b);
+    }
+  }
+}
+
+/* ---- snake order ---- */
+function slotFor(pickIndex){
+  const rd = Math.floor(pickIndex / TEAMS);       // 0-based round
+  const off = pickIndex % TEAMS;
+  return rd % 2 === 0 ? off : TEAMS - 1 - off;    // reverse on odd rounds
+}
+const takenIds = () => new Set(S.picks.map(p=>p.id));
+const available = () => { const t = takenIds(); return PLAYERS.filter(p=>!t.has(p.id)); };
+const mySquad = () => S.picks.filter(p=>p.slot===S.me).map(p=>byId[p.id]);
+
+function needs(){
+  const have = {GK:0,DEF:0,MID:0,FWD:0};
+  mySquad().forEach(p=>have[p.pos]++);
+  const n = {}; for(const k in ROSTER) n[k] = ROSTER[k]-have[k];
+  return n;
+}
+function vona(p, avail){
+  const same = avail.filter(q=>q.pos===p.pos).sort((a,b)=>b.value-a.value);
+  const i = same.findIndex(q=>q.id===p.id);
+  if(i<0 || i+1>=same.length) return p.proj;
+  return p.proj - same[i+1].proj;
+}
+
+/* ---- recommendations ---- */
+function recommend(){
+  const avail = available(), n = needs();
+  return avail
+    .filter(p => n[p.pos] > 0 && !["u","i","s"].includes(p.status))
+    .map(p => {
+      const v = vona(p, avail);
+      const left = avail.filter(q=>q.pos===p.pos && q.value>0).length;
+      const why = [];
+      if(v>=20) why.push(`<span class="cliff">cliff after him</span>`);
+      if(left <= Math.max(n[p.pos],3)) why.push(`only ${left} startable ${p.pos} left`);
+      if(p.status==="d") why.push("fitness doubt");
+      if(p.experts && Object.keys(p.experts).length)
+        why.push(Object.entries(p.experts).map(([c,r])=>`${c} #${r}`).join(", "));
+      return {p, v, score: p.value + 0.5*Math.max(v,0), why};
+    })
+    .sort((a,b)=>b.score-a.score).slice(0,6);
+}
+
+/* ---- autocomplete ---- */
+let sugg = [], sel = 0;
+const entry = document.getElementById("entry"), sbox = document.getElementById("suggest");
+
+/* Nobody types accents under a draft clock: "guehi" must find Guéhi and
+   "sesko" must find Šeško. NFD strips the decomposable marks; the map covers
+   the characters that have no decomposition (ø, ł, đ, ß). */
+const FOLD = {"ø":"o","Ø":"o","ł":"l","Ł":"l","đ":"d","Đ":"d","ß":"ss","æ":"ae","œ":"oe"};
+const strip = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+                    .replace(/[øØłŁđĐßæœ]/g, c => FOLD[c] || c).toLowerCase();
+PLAYERS.forEach(p => { p._n = strip(p.name); p._f = strip(p.full); });
+
+function search(q){
+  q = strip(q.trim());
+  if(!q) return [];
+  const t = takenIds();
+  const hits = [];
+  for(const p of PLAYERS){
+    if(t.has(p.id)) continue;
+    const web = p._n, full = p._f;
+    let rank = -1;
+    if(web === q) rank = 0;
+    else if(web.startsWith(q)) rank = 1;
+    else if(full.startsWith(q)) rank = 2;
+    else if(web.includes(q)) rank = 3;
+    else if(full.includes(q)) rank = 4;
+    if(rank >= 0) hits.push({p, rank});
+  }
+  hits.sort((a,b)=> a.rank-b.rank || b.p.value-a.p.value);
+  return hits.slice(0,9).map(h=>h.p);
+}
+function drawSuggest(){
+  if(!sugg.length){ sbox.style.display="none"; return; }
+  sbox.innerHTML = sugg.map((p,i)=>
+    `<div class="${i===sel?'sel':''}" data-i="${i}">
+       <span class="pos ${p.pos}">${p.pos}</span>
+       <b>${p.name}</b> <span class="muted">${p.full} · ${p.team}</span>
+       <span class="r">${p.value>=0?'+':''}${p.value.toFixed(0)}</span>
+     </div>`).join("");
+  sbox.style.display="block";
+  sbox.querySelectorAll("div[data-i]").forEach(d=>{
+    d.onmousedown = e => { e.preventDefault(); commit(sugg[+d.dataset.i]); };
+  });
+}
+entry.addEventListener("input", ()=>{ sugg = search(entry.value); sel = 0; drawSuggest(); });
+entry.addEventListener("keydown", e=>{
+  if(e.key==="ArrowDown"){ sel=Math.min(sel+1,sugg.length-1); drawSuggest(); e.preventDefault(); }
+  else if(e.key==="ArrowUp"){ sel=Math.max(sel-1,0); drawSuggest(); e.preventDefault(); }
+  else if(e.key==="Enter"){ if(sugg[sel]) commit(sugg[sel]); e.preventDefault(); }
+  else if(e.key==="Escape"){ sugg=[]; drawSuggest(); }
+});
+
+function commit(p){
+  S.picks.push({id:p.id, slot: slotFor(S.picks.length)});
+  save(); entry.value=""; sugg=[]; drawSuggest(); render();
+}
+
+/* ---- rendering ---- */
+let filter = "ALL";
+function render(){
+  if(!S.started){ renderSetup(); return; }
+  document.getElementById("setup").classList.add("hide");
+  document.getElementById("draft").classList.remove("hide");
+
+  const i = S.picks.length, done = i >= TEAMS*SQUAD_SIZE;
+  const slot = slotFor(i), onClock = S.order[slot], mine = slot === S.me;
+  const clock = document.getElementById("clock");
+  clock.textContent = done ? "Draft complete" : (mine ? `YOUR PICK — ${onClock}` : `On the clock: ${onClock}`);
+  clock.className = "clock" + (mine && !done ? " mine" : "");
+  document.getElementById("progress").textContent =
+    done ? `${i} picks` : `Round ${Math.floor(i/TEAMS)+1} · pick ${i+1} of ${TEAMS*SQUAD_SIZE}`;
+  document.getElementById("baselines").textContent =
+    "baseline " + Object.entries(BASELINES).map(([k,v])=>`${k} ${v.toFixed(0)}`).join(" · ");
+  document.getElementById("entryLabel").textContent =
+    done ? "Draft complete" : `Record pick ${i+1} — ${onClock}${mine?" (you)":""}`;
+
+  const avail = available(), n = needs();
+
+  // board
+  const rows = avail.filter(p=>filter==="ALL"||p.pos===filter).slice(0,40);
+  document.getElementById("boardBody").innerHTML = rows.map((p,k)=>{
+    const v = vona(p, avail), full = n[p.pos]<=0;
+    return `<tr class="${full?'full':''}">
+      <td class="muted">${k+1}</td>
+      <td><b>${p.name}</b> ${p.flag?`<span class="flag">${p.flag}</span>`:''}</td>
+      <td><span class="pos ${p.pos}">${p.pos}</span></td>
+      <td class="muted">${p.team}</td>
+      <td class="num">${p.proj.toFixed(0)}</td>
+      <td class="num"><b>${p.value>=0?'+':''}${p.value.toFixed(0)}</b></td>
+      <td class="num ${v>=20?'cliff':''}">${v.toFixed(0)}</td>
+      <td class="num muted">${p.tier}</td></tr>`;
+  }).join("");
+
+  // recommendations
+  document.getElementById("recCard").style.borderColor = mine && !done ? "var(--me)" : "var(--line)";
+  const recs = recommend();
+  document.getElementById("recs").innerHTML = done ? '<span class="muted">—</span>' :
+    (recs.length ? recs.map((r,k)=>
+      `<div class="rec"><span class="muted">${k+1}</span>
+        <span class="pos ${r.p.pos}">${r.p.pos}</span>
+        <b>${r.p.name}</b>
+        <span class="muted">${r.p.value>=0?'+':''}${r.p.value.toFixed(0)}</span>
+        <span class="why">${r.why.join("<br>")||`next ${r.p.pos} ${r.v.toFixed(0)} worse`}</span>
+      </div>`).join("") : '<span class="muted">squad full</span>');
+
+  // scarcity
+  document.getElementById("scarcity").innerHTML = ["FWD","MID","DEF","GK"].map(pos=>{
+    const above = avail.filter(p=>p.pos===pos && p.value>0);
+    const pct = Math.min(100, above.length*4);
+    const col = above.length<=3?"var(--bad)":above.length<=8?"var(--warn)":"var(--good)";
+    return `<div style="margin-bottom:7px">
+      <span class="pos ${pos}">${pos}</span>
+      <b style="color:${col}">${above.length}</b> left
+      <span class="muted">· need ${n[pos]} · ${above[0]?above[0].name:"—"}</span>
+      <div class="bar"><i style="width:${pct}%;background:${col}"></i></div></div>`;
+  }).join("");
+
+  // squad
+  const mine2 = mySquad();
+  document.getElementById("squadCount").textContent = `${mine2.length}/15`;
+  document.getElementById("squad").innerHTML = ["GK","DEF","MID","FWD"].map(pos=>{
+    const g = mine2.filter(p=>p.pos===pos);
+    return `<div style="margin-bottom:4px"><span class="pos ${pos}">${pos}</span>
+      ${g.map(p=>p.name).join(", ")||'<span class="muted">—</span>'}
+      ${n[pos]>0?`<span class="muted">(need ${n[pos]})</span>`:''}</div>`;
+  }).join("");
+
+  // log
+  document.getElementById("log").innerHTML = S.picks.slice(-12).reverse().map((pk,k)=>{
+    const p = byId[pk.id], idx = S.picks.length-k;
+    return `<div>${idx}. ${S.order[pk.slot]}${pk.slot===S.me?" (you)":""} — <b>${p.name}</b></div>`;
+  }).join("") || "—";
+
+  entry.disabled = done; if(!done) entry.focus();
+}
+
+function renderSetup(){
+  document.getElementById("orderList").innerHTML = S.order.map((t,i)=>{
+    const mgr = MANAGERS.find(m=>m.team===t);
+    return `<div class="${i===S.me?'me':''}">
+      <span class="n">${i+1}</span>
+      <span><b>${t}</b> <span class="muted">${mgr?mgr.manager:''}</span></span>
+      <span class="sp">
+        <button data-up="${i}">↑</button><button data-dn="${i}">↓</button>
+        <button data-me="${i}">${i===S.me?'✓ me':'me'}</button>
+      </span></div>`;
+  }).join("");
+  document.querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>move(+b.dataset.up,-1));
+  document.querySelectorAll("[data-dn]").forEach(b=>b.onclick=()=>move(+b.dataset.dn,1));
+  document.querySelectorAll("[data-me]").forEach(b=>b.onclick=()=>{S.me=+b.dataset.me;save();renderSetup();});
+}
+function move(i,d){
+  const j=i+d; if(j<0||j>=S.order.length) return;
+  [S.order[i],S.order[j]]=[S.order[j],S.order[i]];
+  if(S.me===i) S.me=j; else if(S.me===j) S.me=i;
+  save(); renderSetup();
+}
+
+document.getElementById("start").onclick = ()=>{ S.started=true; save(); render(); };
+document.getElementById("undo").onclick = ()=>{ S.picks.pop(); save(); render(); };
+document.getElementById("reset").onclick = ()=>{
+  if(confirm("Clear every pick and start over?")){
+    localStorage.removeItem(KEY); S=load(); render();
+  }
+};
+document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{
+  filter=b.dataset.f;
+  document.querySelectorAll("[data-f]").forEach(x=>x.className="");
+  b.className="p"; render();
+});
+render();
+</script>
