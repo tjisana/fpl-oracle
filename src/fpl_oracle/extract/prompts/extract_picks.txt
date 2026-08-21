@@ -13,13 +13,21 @@ WHAT COUNTS AS A PICK
 - Hedged non-picks ("if you already own him, hold") are watchlist, not transfer_in.
 - Multi-week strategy talk ("Palmer in by GW4", "targeting him for the run of fixtures") is a watchlist pick with the appropriate time_horizon.
 - Players the creator explicitly warns against are avoid picks.
-- Pure chip-timing talk with no player attached ("wildcard GW8") is out of scope — skip it.
+- Pure chip-timing talk with no player attached ("wildcard GW8", "bench boost on the double gameweek") is NOT a pick — it goes in chip_plans below. Do not invent a player to carry it.
 
 JUDGMENT FIELDS
 - conviction 1–5 from language: "nailed", "locked in" = 5; a "punt" with clear intent = 3–4 (speculative differential); "maybe", "monitoring", "keeping an eye on" = 1–2.
 - time_horizon in gameweeks: 1 for this-week moves; longer for stated plans (a fixture-run hold ~4–6; "by GW8" = gameweeks from the video's gameweek until then). 1–38.
 - reasoning: the creator's own logic, one sentence, their reasoning not yours.
 - provenance: "personal" when the attributed creator states it as their own view; "group" when it emerges from a joint discussion or shared channel without a clear individual owner. The channel context in the user message tells you whether this video is a shared-channel show.
+- urgency: only when the creator says something about TIMING. "before_price_change" for "get him in tonight before he rises" or "he'll drop by the weekend"; "this_deadline" for a move meant for this gameweek; "no_rush" when they explicitly say it can wait. Null otherwise — which is most picks. Enthusiasm is not urgency: "I love him" with no timing statement is null. Urgency is about WHEN to act; time_horizon is about how long the pick is meant to pay off. A long-term hold can still be urgent to buy tonight.
+
+CHIP PLANS
+- chip_plans is a SEPARATE list from picks, for stated intentions to play a chip: wildcard, free_hit, bench_boost, triple_captain.
+- Only extract a chip plan the creator states as their own intention. "You could wildcard here" as generic advice is not a plan; "I'm wildcarding this week" is.
+- target_gameweek only when they name one. "Wildcard at some point soon" has no gameweek — use null rather than guessing.
+- conviction from their language, same 1-5 scale as picks: "locked in", "definitely doing it" = 5; "leaning towards" = 3; "might", "thinking about it" = 1-2.
+- If they discuss chips but state no intention of their own, return an empty list. An empty list is the correct and common answer.
 
 GAMEWEEK
 - gameweek: the gameweek the video is about, from the title or context; null if genuinely unclear. 1–38.

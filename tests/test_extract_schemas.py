@@ -7,7 +7,15 @@ exercise dict-shaped input the way structured output will deliver it.
 import pytest
 from pydantic import ValidationError
 
-from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
+from fpl_oracle.extract.schemas import (
+    Chip,
+    ChipPlan,
+    Pick,
+    PickAction,
+    Provenance,
+    Urgency,
+    VideoExtraction,
+)
 
 
 def _pick_payload(**overrides) -> dict:
@@ -84,3 +92,87 @@ def test_video_extraction_round_trip():
     assert extraction.model_copy(update={"gameweek": None}).gameweek is None
     with pytest.raises(ValidationError):
         VideoExtraction.model_validate(extraction.model_dump(mode="json") | {"gameweek": 99})
+
+
+class TestInSeasonExtensions:
+    """Chip plans and urgency, added for in-season content (2026-08-20).
+    GW1 videos are squad reveals; in-season videos are transfers, chip
+    timing, and price-driven urgency."""
+
+    def test_chip_plan_is_separate_from_picks_and_needs_no_player(self) -> None:
+        # A chip is not an opinion about a footballer. Forcing it into Pick
+        # would push a player-less row through a resolver whose whole job is
+        # to refuse rows without a real player.
+        plan = ChipPlan(
+            chip=Chip.WILDCARD,
+            target_gameweek=8,
+            conviction=5,
+            reasoning="Fixtures turn after the international break.",
+            provenance=Provenance.PERSONAL,
+        )
+        assert plan.chip is Chip.WILDCARD
+        assert "player" not in ChipPlan.model_fields
+
+    def test_chip_plan_gameweek_is_optional(self) -> None:
+        # "Wildcard at some point soon" names no gameweek; the model must be
+        # able to say so rather than inventing a number.
+        plan = ChipPlan(
+            chip=Chip.FREE_HIT,
+            conviction=2,
+            reasoning="Thinking about it for a blank.",
+            provenance=Provenance.PERSONAL,
+        )
+        assert plan.target_gameweek is None
+
+    def test_chip_plan_rejects_out_of_range_gameweek(self) -> None:
+        with pytest.raises(ValidationError):
+            ChipPlan(
+                chip=Chip.BENCH_BOOST,
+                target_gameweek=39,
+                conviction=3,
+                reasoning="x",
+                provenance=Provenance.PERSONAL,
+            )
+
+    def test_extraction_without_chip_plans_still_parses(self) -> None:
+        """Every extraction file written before chip_plans existed must keep
+        parsing — data/extractions/ is append-only and never migrated."""
+        raw = (
+            '{"creator_id":"a","video_id":"b","video_title":"t",'
+            '"published_at":"2026-08-01T00:00:00Z","gameweek":1,"picks":[]}'
+        )
+        extraction = VideoExtraction.model_validate_json(raw)
+        assert extraction.chip_plans == []
+
+    def test_urgency_defaults_to_none(self) -> None:
+        # Most picks carry no timing signal; forcing one would be noise.
+        pick = Pick(
+            player_name_raw="Saka",
+            team_inferred="Arsenal",
+            position_inferred="MID",
+            player_id=None,
+            action=PickAction.TRANSFER_IN,
+            conviction=4,
+            time_horizon=6,
+            reasoning="Good run of fixtures.",
+            provenance=Provenance.PERSONAL,
+        )
+        assert pick.urgency is None
+
+    def test_urgency_is_independent_of_time_horizon(self) -> None:
+        # A long-horizon hold can still be urgent to BUY tonight — the two
+        # fields answer different questions.
+        pick = Pick(
+            player_name_raw="Saka",
+            team_inferred="Arsenal",
+            position_inferred="MID",
+            player_id=None,
+            action=PickAction.TRANSFER_IN,
+            conviction=5,
+            time_horizon=10,
+            reasoning="Get him before the rise tonight.",
+            provenance=Provenance.PERSONAL,
+            urgency=Urgency.BEFORE_PRICE_CHANGE,
+        )
+        assert pick.urgency is Urgency.BEFORE_PRICE_CHANGE
+        assert pick.time_horizon == 10

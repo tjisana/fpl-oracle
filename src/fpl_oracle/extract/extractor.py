@@ -36,7 +36,15 @@ from anthropic.types import MessageParam
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
+from fpl_oracle.extract.schemas import (
+    Chip,
+    ChipPlan,
+    Pick,
+    PickAction,
+    Provenance,
+    Urgency,
+    VideoExtraction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +86,19 @@ class _WirePick(BaseModel):
     time_horizon: int = Field(description=_desc(Pick, "time_horizon"))
     reasoning: str = Field(description=_desc(Pick, "reasoning"))
     provenance: Provenance = Field(description=_desc(Pick, "provenance"))
+    urgency: Urgency | None = Field(description=_desc(Pick, "urgency"))
+
+
+class _WireChipPlan(BaseModel):
+    """LLM-facing chip plan: `ChipPlan` minus the numeric bounds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chip: Chip = Field(description=_desc(ChipPlan, "chip"))
+    target_gameweek: int | None = Field(description=_desc(ChipPlan, "target_gameweek"))
+    conviction: int = Field(description=_desc(ChipPlan, "conviction"))
+    reasoning: str = Field(description=_desc(ChipPlan, "reasoning"))
+    provenance: Provenance = Field(description=_desc(ChipPlan, "provenance"))
 
 
 class _WireExtraction(BaseModel):
@@ -87,6 +108,7 @@ class _WireExtraction(BaseModel):
 
     gameweek: int | None = Field(description=_desc(VideoExtraction, "gameweek"))
     picks: list[_WirePick]
+    chip_plans: list[_WireChipPlan] = Field(description=_desc(VideoExtraction, "chip_plans"))
 
 
 # The SDK defaults (read timeout 600s, max_retries=2) compound badly here:
@@ -138,6 +160,7 @@ def _to_strict(
         published_at=published_at,
         gameweek=wire.gameweek,
         picks=[Pick.model_validate({**p.model_dump(), "player_id": None}) for p in wire.picks],
+        chip_plans=[ChipPlan.model_validate(c.model_dump()) for c in wire.chip_plans],
     )
 
 
