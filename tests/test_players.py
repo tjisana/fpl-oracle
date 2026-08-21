@@ -200,6 +200,105 @@ _ELEMENTS = [
         "status": "a",
         "chance_of_playing_next_round": 100,
     },
+    # --- Mutation-hardening fixtures below: each pair exists to make the
+    # `_first_name_reference` deferral guard's own behaviour observable
+    # end-to-end (mutation testing found the pre-existing fixture let it
+    # be deleted, or weakened, without failing any test). See the
+    # "mutation hardening" test classes for what each pair pins.
+    {
+        # Genuine surname owner: web_name IS "Cody". Paired with id 16
+        # below, whose FIRST name is "Cody" — the exact shape the
+        # deferral guard exists to defend (a real web_name/full_name
+        # match must always outrank/never be silently overridden by
+        # someone else's first name).
+        "id": 15,
+        "web_name": "Cody",
+        "first_name": "Jamie",
+        "second_name": "Cody",
+        "team": 7,
+        "element_type": 4,  # FWD
+        "now_cost": 70,
+        "status": "a",
+        "chance_of_playing_next_round": 100,
+    },
+    {
+        # First-name rival to id 15's surname: shares "Cody" as a FIRST
+        # name, same club+position as id 15. If the deferral guard were
+        # deleted (mutation 1), `_first_name_reference` would see this as
+        # the sole first-name match and return it directly — before the
+        # real surname owner (id 15) is ever considered.
+        "id": 16,
+        "web_name": "Rival",
+        "first_name": "Cody",
+        "second_name": "Rival",
+        "team": 7,
+        "element_type": 4,  # FWD
+        "now_cost": 45,
+        "status": "a",
+        "chance_of_playing_next_round": 100,
+    },
+    {
+        # Genuine surname owner whose web_name splits into two ASR-style
+        # tokens ("Harr ison" == "Harrison"). Paired with id 18: the
+        # guard must compare the NORMALIZED STRING ("harrison" ==
+        # "harrison"), not the token SET ({"harr","ison"} !=
+        # {"harrison"}) — mutating that comparison to a token-set compare
+        # (mutation 3) makes the guard blind to this split-token surname.
+        "id": 17,
+        "web_name": "Harrison",
+        "first_name": "Jaidon",
+        "second_name": "Harrison",
+        "team": 4,
+        "element_type": 3,  # MID
+        "now_cost": 55,
+        "status": "a",
+        "chance_of_playing_next_round": 100,
+    },
+    {
+        # First-name rival to id 17's surname ("Harrison" as a FIRST
+        # name), same club+position. A token-set-compare guard (mutation
+        # 3) fails to recognize id 17 as the real surname owner and
+        # falls through to this decoy instead.
+        "id": 18,
+        "web_name": "Armstrong",
+        "first_name": "Harrison",
+        "second_name": "Armstrong",
+        "team": 4,
+        "element_type": 3,  # MID
+        "now_cost": 45,
+        "status": "a",
+        "chance_of_playing_next_round": 100,
+    },
+    {
+        # Genuine ambiguity: shares the first name "Anthony" with id 20
+        # at the SAME club AND position, with no real web_name/full_name
+        # surname match for "Anthony" anywhere in the fixture (so the
+        # deferral guard never fires here — this pair exercises the
+        # `len(matches) == 1` refusal instead). Mutating that to
+        # `len(matches) >= 1` (mutation 4) would take the first of these
+        # two arbitrarily instead of refusing.
+        "id": 19,
+        "web_name": "Elanga",
+        "first_name": "Anthony",
+        "second_name": "Elanga",
+        "team": 7,
+        "element_type": 2,  # DEF
+        "now_cost": 55,
+        "status": "a",
+        "chance_of_playing_next_round": 100,
+    },
+    {
+        # See id 19 — its ambiguity partner.
+        "id": 20,
+        "web_name": "Mainoo",
+        "first_name": "Anthony",
+        "second_name": "Mainoo",
+        "team": 7,
+        "element_type": 2,  # DEF
+        "now_cost": 55,
+        "status": "a",
+        "chance_of_playing_next_round": 100,
+    },
 ]
 
 
@@ -428,6 +527,104 @@ class TestResolveFirstNameReference:
 
     def test_first_name_needs_the_team_to_agree(self, db: PlayerDB) -> None:
         result = db.resolve("Bukayo", team_inferred="Liverpool", position_inferred="MID")
+        assert result.player is None
+
+
+class TestFirstNameReferenceMutationHardening:
+    """Pins the exact behaviours a mutation-testing pass (9 targeted
+    mutations against `_first_name_reference`) found the pre-existing
+    suite could not tell apart from the real thing. Six mutations
+    survived; one (`position_agree is not False` -> `is True` in the
+    deferral guard) is a genuine equivalent mutant — with no position
+    hint, `position_agree` is None for every candidate either way, and
+    `matches` below always requires `position_agree is True`, so no
+    fixture can make that particular line observable. The other five are
+    pinned here."""
+
+    def test_deferral_guard_stops_a_first_name_rival_from_winning(self, db: PlayerDB) -> None:
+        # Mutation 1: delete the deferral guard entirely.
+        #
+        # id 15 ("Cody", Man Utd FWD) is a genuine surname owner; id 16
+        # ("Rival") shares "Cody" as its FIRST name at the SAME club and
+        # position. With the guard intact, `_first_name_reference` defers
+        # (id 15 is a real, non-contradicting surname match) and control
+        # passes to Tier 1 — which then correctly refuses to pick between
+        # two candidates that both score a fuzzy 100 for this club+
+        # position (id 15 exact; id 16 via the "Cody Rival" subset-100
+        # pathology): AMBIGUOUS, not a fabricated pick.
+        #
+        # Delete the guard and `_first_name_reference` instead computes
+        # `matches` directly: id 16 is the sole first-name match (team
+        # and position both agree), so it gets returned immediately,
+        # BEFORE Tier 1 (and id 15) are ever considered — a silent wrong
+        # match for a reference that plainly means the surname owner.
+        result = db.resolve("Cody", team_inferred="Man Utd", position_inferred="FWD")
+        assert result.status == MatchStatus.AMBIGUOUS
+        assert result.player is None
+        candidate_ids = {c.player_id for c in result.candidates}
+        assert {15, 16} == candidate_ids
+
+    def test_deferral_guard_uses_normalized_string_not_token_set(self, db: PlayerDB) -> None:
+        # Mutation 3: the guard's `_normalize(...) == raw` comparisons
+        # become a token-SET comparison instead.
+        #
+        # "Harr ison" is exactly the ASR-split-token case the module
+        # docstring calls out: `_normalize("Harr ison")` == "harrison",
+        # a real surname match for id 17 by STRING equality — but as
+        # TOKEN SETS, {"harr", "ison"} != {"harrison"}, so a token-set
+        # compare would fail to see id 17 as a surname owner at all
+        # (exact_name is False here too, for the same reason) and fall
+        # through to id 18 ("Armstrong"), whose FIRST name is "Harrison"
+        # at the same club+position — the wrong player.
+        result = db.resolve("Harr ison", team_inferred="Everton", position_inferred="MID")
+        assert result.status == MatchStatus.MATCHED
+        assert result.player is not None
+        assert result.player.player_id == 17
+        assert result.player.web_name == "Harrison"
+
+    def test_ambiguous_shared_first_name_refuses_rather_than_picks_one(self, db: PlayerDB) -> None:
+        # Mutation 4: `len(matches) == 1` -> `len(matches) >= 1` (take
+        # the first candidate instead of abstaining).
+        #
+        # id 19 ("Elanga") and id 20 ("Mainoo") share the first name
+        # "Anthony" at the SAME club AND position, and neither is a real
+        # web_name/full_name match for "Anthony" — so the deferral guard
+        # never fires, and this exercises the ambiguity check directly.
+        # The correct behaviour refuses (falls through to Tier 1, which
+        # also ties and returns AMBIGUOUS); taking "the first" would
+        # silently commit to whichever of the two happens to sort first.
+        result = db.resolve("Anthony", team_inferred="Man Utd", position_inferred="DEF")
+        assert result.status == MatchStatus.AMBIGUOUS
+        assert result.player is None
+        candidate_ids = {c.player_id for c in result.candidates}
+        assert {19, 20} == candidate_ids
+
+    def test_first_name_reference_needs_team_to_positively_agree_not_just_not_contradict(
+        self, db: PlayerDB
+    ) -> None:
+        # Mutation 5: `team_agree is True` -> `team_agree is not False`
+        # in the match filter.
+        #
+        # Existing coverage only tests a CONTRADICTING team hint (False);
+        # this pins the ABSENT case (None), which is what the mutation
+        # actually changes — 20 of 478 real picks carry no team hint at
+        # all. "Bukayo" is unique for MID with no team hint supplied
+        # (team_agree is None for every candidate, since there's nothing
+        # to confirm or contradict). The rule demands team POSITIVELY
+        # agree, not merely fail to contradict, so this must refuse.
+        result = db.resolve("Bukayo", team_inferred=None, position_inferred="MID")
+        assert result.status == MatchStatus.UNMATCHED
+        assert result.player is None
+
+    def test_first_name_reference_needs_position_to_positively_agree_not_just_not_contradict(
+        self, db: PlayerDB
+    ) -> None:
+        # Mutation 6: `position_agree is True` -> `position_agree is not
+        # False` in the match filter. Symmetric to the team case above:
+        # a team hint alone, with NO position hint (position_agree is
+        # None for every candidate), must not be enough to commit.
+        result = db.resolve("Bukayo", team_inferred="Arsenal", position_inferred=None)
+        assert result.status == MatchStatus.UNMATCHED
         assert result.player is None
 
 

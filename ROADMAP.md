@@ -68,8 +68,22 @@ is it worth -4?" Different objective, much smaller search space.
       of picks to name resolution, Gianni Buttice 0%.
 - [ ] **Re-extraction re-pays for creators already done** — no skip-if-recent check,
       so a stage-2 retry re-bills every creator.
-- [ ] **Tier-2 phonetic matching is loose** — 2 wrong matches remain in the probe;
-      a first name that sounds like a teammate's surname can still slip through.
+- [x] ~~First-name references resolved to the wrong player~~ — FIXED. `b12e4a1`
+      added an explicit first-name path; `1abf491` then fixed a wrong-match
+      regression it introduced (accent-stripping made "Jérémy" and "Jeremy"
+      different keys, hiding Doku behind an academy player). Live roster now:
+      523/537 first-name references correct, **0 wrong** (was 8 correct / 33 wrong).
+- [ ] **`selling_price` is not available from public FPL endpoints** — it lives on
+      the authenticated `my-team/{id}/` endpoint. `fpl/entry.py` leaves it `None`
+      rather than recomputing from `now_cost` (which would misstate budget on every
+      transfer decision). PATH FORWARD, no credentials needed: `entry/{id}/transfers/`
+      is public and carries the cost each player was bought/sold at, so purchase price
+      is derivable for transferred-in players; the initial squad needs a price snapshot
+      we can take ourselves once running daily.
+- [ ] **Free-transfer derivation is unvalidated** — structurally sound, but no squad
+      has transfer history this season yet. Spot-check after a few gameweeks.
+- [ ] **Tier-2 phonetic matching is loose** — a first name that sounds like a
+      teammate's surname can still slip through the fuzzy tiers.
 - [ ] 4 eligible creators contributed nothing to the GW1 run (FPL Heisenberg,
       FPL Matthew, Planet FPL, Pras). Pras matters most — he's The FPL Wire's
       channel primary, so his absence silently costs Zophar and Lateriser too.

@@ -67,6 +67,7 @@ Tier 1 itself was silently over-trusting — round 2 hardens it):
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -192,11 +193,33 @@ class MatchResult(BaseModel):
     name_raw: str
 
 
+# Latin letters that carry a stroke or are a ligature rather than a
+# combining accent — NFKD leaves these intact, so they must be mapped by
+# hand or they vanish under the a-z filter below.
+_DEACCENT_SPECIALS = str.maketrans(
+    {"ø": "o", "đ": "d", "ß": "ss", "æ": "ae", "œ": "oe", "ł": "l", "þ": "th", "ð": "d"}
+)
+
+
 def _normalize(text: str) -> str:
-    """Lowercase, letters-only — the shared normalization for both the
-    raw transcript name and the candidate's web_name/second_name before
-    phonetic comparison."""
-    return re.sub(r"[^a-z]", "", text.lower())
+    """Lowercase, ASCII letters only, with accents FOLDED rather than
+    dropped — the shared normalization for the raw transcript name and
+    for the candidate's names.
+
+    Folding is load-bearing, not cosmetic. Deleting accented characters
+    outright makes two different names collapse to different keys while
+    LOOKING handled: "Jérémy" became "jrmy" and "Jeremy" became "jeremy",
+    so Jérémy Doku was invisible as a rival to Jeremy Monga at the same
+    club and position — and `_first_name_reference`'s uniqueness test
+    then saw a lone candidate and confidently returned the £5.0m academy
+    player for a reference that means Doku every time. Auto-captions emit
+    the ASCII spelling essentially always, so the accented form is the one
+    that must bend. 44 players on the live roster have accented first
+    names, each an invisible rival under the old behaviour.
+    """
+    folded = unicodedata.normalize("NFKD", text.lower().translate(_DEACCENT_SPECIALS))
+    stripped = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z]", "", stripped)
 
 
 def _token_set(text: str) -> frozenset[str]:
@@ -423,6 +446,11 @@ def _first_name_reference(name_raw: str, scored: list[_Candidate]) -> _Candidate
     #   Martinelli, and deferring to the DEF would strand a reference the
     #   composite key can resolve — the exact case the fpl-domain skill
     #   calls out as what the composite key is FOR.
+    # - Only when that surname belongs to a candidate at a NON-contradicting
+    #   club. A Leeds midfielder named James must not block "James" at
+    #   Liverpool: deferring there dropped a reference the composite key
+    #   resolves cleanly, and the fuzzy fall-through then returned a wrong
+    #   Liverpool teammate instead.
     if any(
         (
             c.exact_name
@@ -430,6 +458,7 @@ def _first_name_reference(name_raw: str, scored: list[_Candidate]) -> _Candidate
             or _normalize(c.player.full_name) == raw
         )
         and c.position_agree is not False
+        and c.team_agree is not False
         for c in scored
     ):
         return None
