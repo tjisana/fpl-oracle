@@ -33,6 +33,7 @@ WIRE_PICK = {
     "time_horizon": 1,
     "reasoning": "Nailed on set pieces.",
     "provenance": "personal",
+    "urgency": None,
 }
 
 
@@ -95,7 +96,7 @@ def test_wire_schema_excludes_player_id():
 
 
 def test_pipeline_stamps_metadata_and_forces_player_id_none(monkeypatch):
-    wire = _WireExtraction(gameweek=1, picks=[_WirePick.model_validate(WIRE_PICK)])
+    wire = _WireExtraction(gameweek=1, picks=[_WirePick.model_validate(WIRE_PICK)], chip_plans=[])
     calls = _fake_client(monkeypatch, [_response(wire)])
 
     result = _extract()
@@ -110,7 +111,9 @@ def test_pipeline_stamps_metadata_and_forces_player_id_none(monkeypatch):
 
 
 def test_request_shape_is_pinned(monkeypatch):
-    wire = _WireExtraction(gameweek=None, picks=[_WirePick.model_validate(WIRE_PICK)])
+    wire = _WireExtraction(
+        gameweek=None, picks=[_WirePick.model_validate(WIRE_PICK)], chip_plans=[]
+    )
     calls = _fake_client(monkeypatch, [_response(wire)])
     _extract()
 
@@ -148,12 +151,12 @@ def _invalid_wire():
     """Wire-valid (unconstrained) but strict-invalid: conviction out of the
     1-5 band. The SDK accepts this; our strict pass must reject and retry."""
     return _WireExtraction(
-        gameweek=1, picks=[_WirePick.model_validate({**WIRE_PICK, "conviction": 9})]
+        gameweek=1, picks=[_WirePick.model_validate({**WIRE_PICK, "conviction": 9})], chip_plans=[]
     )
 
 
 def test_strict_validation_failure_retries_with_feedback_then_succeeds(monkeypatch):
-    good = _WireExtraction(gameweek=1, picks=[_WirePick.model_validate(WIRE_PICK)])
+    good = _WireExtraction(gameweek=1, picks=[_WirePick.model_validate(WIRE_PICK)], chip_plans=[])
     calls = _fake_client(
         monkeypatch,
         [_response(_invalid_wire(), text='{"bad": "output"}'), _response(good)],
@@ -184,7 +187,7 @@ def test_wire_model_accepts_what_strict_rejects():
 
 
 def test_zero_picks_logs_warning(monkeypatch, caplog):
-    wire = _WireExtraction(gameweek=1, picks=[])
+    wire = _WireExtraction(gameweek=1, picks=[], chip_plans=[])
     _fake_client(monkeypatch, [_response(wire)])
     with caplog.at_level(logging.WARNING):
         result = _extract()

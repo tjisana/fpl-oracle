@@ -22,10 +22,22 @@ Design decisions carried in here:
   field is required — the extractor must commit to one.
 - `time_horizon` captures multi-week strategy talk ("for the run of
   fixtures", "Palmer in by GW4") so future gameweeks can be steered by it.
-- DEFERRED: player-less strategy statements (pure chip-timing plans like
-  "wildcard GW8" with no player attached) have no home in this schema —
-  every Pick requires a player name. Chip-plan modeling is out of v1
-  extraction scope; such statements are knowingly dropped.
+- CHIP PLANS (added for in-season, 2026-08-20): player-less strategy
+  statements ("wildcard GW8", "bench boost on the double") were knowingly
+  dropped in v1, because every Pick requires a player name and GW1 content
+  is squad reveals. In-season that inverts — creators publish entire
+  videos on chip timing, and a chip is worth more than any single
+  transfer. `ChipPlan` gives them a home alongside `picks`, deliberately
+  as a SEPARATE list rather than a Pick with a null player: a chip is not
+  an opinion about a footballer, and forcing it into Pick would put a
+  synthetic player-less row through a resolver whose entire job is to
+  refuse rows without a real player.
+- URGENCY (added for in-season, 2026-08-20): "get him in before he rises
+  tonight" and "I will decide on Saturday" are different instructions
+  with the same action and the same player. Prices move nightly, so the
+  distinction is the difference between acting today and losing 0.1m of
+  team value. Optional, because most statements genuinely carry no
+  urgency signal and forcing the model to invent one would be noise.
 """
 
 from __future__ import annotations
@@ -48,6 +60,29 @@ class PickAction(StrEnum):
     BENCH = "bench"
     AVOID = "avoid"
     WATCHLIST = "watchlist"
+
+
+class Urgency(StrEnum):
+    """WHEN the creator says to act. Distinct from `time_horizon`, which is
+    about how many gameweeks a pick is meant to pay off over: a player can
+    be a long-horizon hold that must nonetheless be bought TONIGHT to beat
+    a price rise."""
+
+    BEFORE_PRICE_CHANGE = "before_price_change"
+    THIS_DEADLINE = "this_deadline"
+    NO_RUSH = "no_rush"
+
+
+class Chip(StrEnum):
+    """FPL chips. Verify the current season's chip set at season start —
+    the game adds and renames chips some years (see the `fpl-domain`
+    skill); an unrecognised chip name must not be silently coerced into a
+    neighbouring one."""
+
+    WILDCARD = "wildcard"
+    FREE_HIT = "free_hit"
+    BENCH_BOOST = "bench_boost"
+    TRIPLE_CAPTAIN = "triple_captain"
 
 
 class Provenance(StrEnum):
@@ -122,6 +157,51 @@ class Pick(BaseModel):
             "channel without a clear individual owner."
         ),
     )
+    urgency: Urgency | None = Field(
+        default=None,
+        description=(
+            "WHEN to act, if the creator says: 'before_price_change' for 'get him in "
+            "tonight before he goes up', 'this_deadline' for a move meant for this "
+            "gameweek, 'no_rush' when they explicitly say it can wait. Null when they "
+            "give no timing signal at all — most picks. Do not infer urgency from "
+            "enthusiasm; only from an actual statement about timing."
+        ),
+    )
+
+
+class ChipPlan(BaseModel):
+    """A stated intention to play a chip in a particular gameweek.
+
+    Player-less by nature, which is exactly why it is not a `Pick`. A chip
+    swings more points than any single transfer, so an in-season system
+    that reads only player opinions is deaf to the biggest calls the
+    creators make.
+    """
+
+    chip: Chip = Field(description="which chip the creator plans to play")
+    target_gameweek: int | None = Field(
+        default=None,
+        ge=1,
+        le=38,
+        description=(
+            "The gameweek they intend to play it in, if stated. None when they name the "
+            "chip but not a gameweek ('wildcard at some point soon') — do not guess a number."
+        ),
+    )
+    conviction: int = Field(
+        ge=1,
+        le=5,
+        description=(
+            "How firm the plan is, 1-5, from their language: 'locked in', 'definitely "
+            "this week' = 5; 'leaning towards', 'probably' = 3; 'might', 'considering' = 1-2."
+        ),
+    )
+    reasoning: str = Field(
+        max_length=300, description="the creator's own stated reason, one sentence"
+    )
+    provenance: Provenance = Field(
+        description="whether this is the attributed creator's own plan or a group position"
+    )
 
 
 class VideoExtraction(BaseModel):
@@ -140,3 +220,10 @@ class VideoExtraction(BaseModel):
         ),
     )
     picks: list[Pick]
+    chip_plans: list[ChipPlan] = Field(
+        default_factory=list,
+        description=(
+            "Player-less chip-timing intentions stated in the video. Defaults to empty so "
+            "every extraction file written before this field existed still parses."
+        ),
+    )
