@@ -95,44 +95,79 @@ class TestBootstrapStaticCacheFreshness:
         assert data == _CANNED_BOOTSTRAP
 
 
-class TestEntryCacheNeverExpires:
-    """The bootstrap-static freshness override is specific to that one
-    function — entry/history caches (via `_get_json`) must keep caching
-    indefinitely, no matter how old the file on disk is."""
+def _fake_get(calls: list[str], payload: dict):
+    """httpx.get stand-in that records the URL and returns `payload`."""
 
-    def test_ancient_entry_cache_is_not_refetched(self, tmp_path: Path, monkeypatch) -> None:
+    def fake_get(url: str, **kwargs) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse(payload)
+
+    return fake_get
+
+
+class TestEntryCacheExpires:
+    """These caches used to be pinned as never-expiring, and that was
+    correct at the time: only `started_event` and past-season ranks were
+    read from them, and neither rewrites itself.
+
+    That premise died when league standings, `summary_overall_rank` and
+    `summary_overall_points` were added to `EntrySummary` — all of which
+    move every gameweek. A permanent cache then means a GW5 run reports
+    GW1's rank and GW1's mini-league positions with nothing marking them
+    stale. The old invariant is deliberately inverted here rather than
+    deleted, so the reason is on the record.
+    """
+
+    def _ancient(self, path: Path) -> None:
+        ancient = time.time() - 365 * 24 * 60 * 60
+        os.utime(path, (ancient, ancient))
+
+    def test_stale_entry_cache_is_refetched(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        cache_path = client._cache_path("entry", 12345)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({**_CANNED_ENTRY, "name": "Stale Name"}))
+        self._ancient(cache_path)
+
+        calls: list[str] = []
+        monkeypatch.setattr(client.httpx, "get", _fake_get(calls, _CANNED_ENTRY))
+
+        entry = client.get_entry(12345)
+
+        assert calls, "a year-old entry cache must be refetched, not served"
+        assert entry is not None
+        assert entry.team_name == "Test Team"
+
+    def test_fresh_entry_cache_is_served_without_network(self, tmp_path: Path, monkeypatch) -> None:
+        """The point is freshness, not defeating the cache: a deadline
+        morning must not refetch on every call."""
         monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
         cache_path = client._cache_path("entry", 12345)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(_CANNED_ENTRY))
-        ancient_mtime = time.time() - 365 * 24 * 60 * 60  # a year old
-        os.utime(cache_path, (ancient_mtime, ancient_mtime))
+        # mtime is "now" — well inside the freshness window.
 
         def fail_get(*args, **kwargs):
-            raise AssertionError("httpx.get should not be called — entry caches never expire")
+            raise AssertionError("a fresh entry cache must not hit the network")
 
         monkeypatch.setattr(client.httpx, "get", fail_get)
 
-        entry = client.get_entry(12345)
+        assert client.get_entry(12345) is not None
 
-        assert entry is not None
-        assert entry.team_name == "Test Team"
-
-    def test_ancient_history_cache_is_not_refetched(self, tmp_path: Path, monkeypatch) -> None:
+    def test_stale_history_cache_is_refetched(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
         cache_path = client._cache_path("history", 12345)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"past": [{"season_name": "2023/24", "rank": 100}]}))
-        ancient_mtime = time.time() - 365 * 24 * 60 * 60
-        os.utime(cache_path, (ancient_mtime, ancient_mtime))
+        cache_path.write_text(json.dumps({"past": []}))
+        self._ancient(cache_path)
 
-        def fail_get(*args, **kwargs):
-            raise AssertionError("httpx.get should not be called — history caches never expire")
-
-        monkeypatch.setattr(client.httpx, "get", fail_get)
+        payload = {"past": [{"season_name": "2023/24", "rank": 100}], "current": [], "chips": []}
+        calls: list[str] = []
+        monkeypatch.setattr(client.httpx, "get", _fake_get(calls, payload))
 
         history = client.get_entry_history(12345)
 
+        assert calls, "a year-old history cache must be refetched"
         assert history is not None
         assert len(history.past) == 1
 

@@ -32,6 +32,15 @@ HEADERS = {
 # youtube_client uploads-listing freshness override.
 _BOOTSTRAP_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 
+# `entry/{id}/` and `entry/{id}/history/` were cached forever on the
+# reasoning that a manager's history doesn't rewrite itself. That was true
+# when only `started_event` and past seasons were read from them. They now
+# also carry `summary_overall_points`, `summary_overall_rank` and the whole
+# league-standings block — all of which move every gameweek. One hour keeps
+# a deadline-morning run cheap while guaranteeing the standings are this
+# gameweek's.
+_ENTRY_CACHE_MAX_AGE_SECONDS = 60 * 60
+
 
 class LeagueStanding(BaseModel):
     """One entry of `entry/{id}/`'s `leagues.classic[]` or `leagues.h2h[]`
@@ -161,11 +170,22 @@ def _cache_path(kind: str, entry_id: int) -> Path:
 _NOT_FOUND = {"not_found": True}
 
 
-def _get_json(url: str, cache_path: Path) -> dict | None:
-    """Returns None for a cached-or-live 404 (bad ID), the JSON body otherwise."""
+def _get_json(url: str, cache_path: Path, max_age_seconds: float | None = None) -> dict | None:
+    """Returns None for a cached-or-live 404 (bad ID), the JSON body otherwise.
+
+    `max_age_seconds=None` caches forever, which is right for genuinely
+    immutable payloads. Anything carrying a rank, a points total, or a
+    league position MUST pass a max age: those change every gameweek, and
+    a permanent cache turns them into last-week's numbers presented with
+    no staleness marker — the silent-wrong-answer failure this project
+    treats as the worst outcome available."""
     if cache_path.exists():
-        data = json.loads(cache_path.read_text())
-        return None if data == _NOT_FOUND else data
+        fresh = (
+            max_age_seconds is None or (time.time() - cache_path.stat().st_mtime) < max_age_seconds
+        )
+        if fresh:
+            data = json.loads(cache_path.read_text())
+            return None if data == _NOT_FOUND else data
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -288,7 +308,11 @@ def get_current_completed_gameweek() -> int | None:
 
 def get_entry(entry_id: int) -> EntrySummary | None:
     """Fetch a manager's public profile. Returns None on 404 (bad ID)."""
-    data = _get_json(f"{API_BASE}/entry/{entry_id}/", _cache_path("entry", entry_id))
+    data = _get_json(
+        f"{API_BASE}/entry/{entry_id}/",
+        _cache_path("entry", entry_id),
+        max_age_seconds=_ENTRY_CACHE_MAX_AGE_SECONDS,
+    )
     if data is None:
         return None
     leagues = data.get("leagues") or {}
@@ -308,7 +332,11 @@ def get_entry(entry_id: int) -> EntrySummary | None:
 
 
 def get_entry_history(entry_id: int) -> EntryHistory | None:
-    data = _get_json(f"{API_BASE}/entry/{entry_id}/history/", _cache_path("history", entry_id))
+    data = _get_json(
+        f"{API_BASE}/entry/{entry_id}/history/",
+        _cache_path("history", entry_id),
+        max_age_seconds=_ENTRY_CACHE_MAX_AGE_SECONDS,
+    )
     if data is None:
         return None
     return EntryHistory(
