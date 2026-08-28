@@ -86,7 +86,7 @@ def _fake_result(
 
 
 def _fake_extract_summary(
-    report_path: Path, attempted: int = 3, succeeded: int = 3, failures=None
+    report_path: Path, attempted: int = 3, succeeded: int = 3, failures=None, skip_count: int = 0
 ) -> SimpleNamespace:
     """Duck-typed stand-in for `extract.run_extract.ExtractionRunSummary` —
     the counts `main()` gates stage 3 on, plus the report path it prints."""
@@ -97,6 +97,7 @@ def _fake_extract_summary(
         succeeded=succeeded,
         failures=fails,
         failed=len(fails),
+        skip_count=skip_count,
     )
 
 

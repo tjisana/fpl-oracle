@@ -57,6 +57,7 @@ from fpl_oracle.extract.schemas import PickAction
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict, filter_squad_candidates
 from fpl_oracle.fpl.client import CACHE_DIR
 from fpl_oracle.fpl.players import PlayerDB, Position
+from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.report.models import NuanceRecord, SquadNuance
 from fpl_oracle.roster.models import Creator
 from fpl_oracle.roster.registry import REGISTRY
@@ -817,7 +818,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging()
 
     nuance_fn = None
     if args.nuance:

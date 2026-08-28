@@ -3,26 +3,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
 from fpl_oracle.extract.run_extract import (
     GENERIC_IN_SEASON_PATTERNS,
-    ExtractionRunSummary,
-    ResolvedExtraction,
-    VideoSelection,
     _resolve_gameweek_and_window,
     gameweek_title_patterns,
     is_gameweek_video,
     render_match_quality,
     resolve_extraction,
-    run_extraction,
 )
 from fpl_oracle.extract.schemas import Pick, VideoExtraction
 from fpl_oracle.fpl.players import MatchStatus, PlayerDB
-from fpl_oracle.ingest.youtube_client import VideoInfo
-from fpl_oracle.roster.models import Creator, Tier
 from tests.test_players import _bootstrap_payload
 
 
@@ -236,8 +229,9 @@ def test_render_match_quality_lists_only_unresolved(db):
     r = resolve_extraction(
         _extraction([_pick(), _pick(player_name_raw="Ronaldinho", team_inferred=None)]), db
     )
-    report = render_match_quality([r])
+    report = render_match_quality([r], gameweek=2)
     assert "1/2 picks matched (50%)" in report
+    assert "GW2" in report  # the report header keys off the target gameweek, not a hardcoded GW1
     assert "'Ronaldinho'" in report
     assert "'Sacca'" not in report  # matched picks aren't noise in the report
     assert "lets-talk-fpl" in report

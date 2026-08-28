@@ -49,6 +49,7 @@ from fpl_oracle.ingest.youtube_client import (
     get_video_durations,
     list_recent_videos,
 )
+from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.roster.claim_extract import channel_context_for
 from fpl_oracle.roster.models import Creator
 from fpl_oracle.roster.registry import REGISTRY
@@ -557,7 +558,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging()
     gameweek, published_after = resolve_target_gameweek(args.gameweek)
 
     if args.dry_run:
