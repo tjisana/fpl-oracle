@@ -50,10 +50,14 @@ logger = logging.getLogger(__name__)
 
 MODEL = "claude-opus-5"
 # Hard cap on thinking + output together (thinking is ON by default on
-# claude-opus-5). A 15-pick reveal is ~3-5K output tokens; if truncation
-# bites on real videos, the levers are output_config effort "medium"
-# (extraction is not deep-reasoning work) or streaming with a higher cap.
-MAX_TOKENS = 16_000
+# claude-opus-5). RAISED from 16K after it truncated EVERY creator on GW1
+# deadline day: 16K was sized against a 15-pick team reveal at ~3-5K output
+# tokens, but a "final thoughts" video discusses far more players (29 picks
+# in one live case), and each pick now also carries `urgency` while the
+# extraction carries `chip_plans`. Thinking shares this budget, so the
+# usable output half was well under 16K. Truncation is the expensive
+# failure: the call is paid for in full and yields nothing.
+MAX_TOKENS = 32_000
 MAX_VALIDATION_RETRIES = 2
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "extract_picks.txt").read_text()
@@ -111,13 +115,20 @@ class _WireExtraction(BaseModel):
     chip_plans: list[_WireChipPlan] = Field(description=_desc(VideoExtraction, "chip_plans"))
 
 
-# The SDK defaults (read timeout 600s, max_retries=2) compound badly here:
-# 3 validation attempts x 3 HTTP attempts x 600s is 90 minutes on ONE
-# creator, and `run_extraction` walks ~18 of them sequentially against a
-# hard deadline wall. A GW1 reveal extraction that hasn't answered in three
-# minutes is not going to; failing fast lets the next creator run, and
-# per-creator failures are already non-fatal.
-REQUEST_TIMEOUT_SECONDS = 180.0
+# Bounded, but NOT aggressive. The SDK defaults (600s read, max_retries=2)
+# compound badly across ~18 sequential creators against a hard deadline
+# wall, so a cap is still wanted.
+#
+# 180s was the first attempt and it was WRONG — measured live on GW1
+# deadline day, it timed out on a 9,137-word transcript before the model
+# had answered. Real creator transcripts run 6-10k words and thinking is
+# on by default, so a few minutes of latency is normal, not a hang. The
+# cost asymmetry is lopsided: a too-short timeout throws away a call
+# already paid for AND loses the creator, while a too-long one only costs
+# waiting. 480s is comfortably above observed latency and still bounds the
+# worst case to ~2.5 h across 18 creators, well inside the retry budget a
+# deadline morning allows.
+REQUEST_TIMEOUT_SECONDS = 480.0
 MAX_HTTP_RETRIES = 1
 
 
