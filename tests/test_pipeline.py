@@ -18,8 +18,10 @@ from pathlib import Path
 
 import pytest
 
+from fpl_oracle import pipeline
 from fpl_oracle.extract.run_extract import ResolvedExtraction
 from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
+from fpl_oracle.fpl.client import EntrySummary
 from fpl_oracle.fpl.players import Player, PlayerDB, Position
 from fpl_oracle.pipeline import (
     NoConsensusEvidenceError,
@@ -1175,3 +1177,110 @@ class TestStaleGameweekExtractionsAreExcluded:
 
         assert result.record.counts.extractions_loaded == 1
         assert result.record.excluded_wrong_gameweek == []
+
+
+# ---------------------------------------------------------------------------
+# Gap 4 — fetch_my_squad_summary's real degradation paths. Every other test
+# in this module injects a fake `my_squad_fn` (typically returning
+# `(None, note)` directly), so the REAL function's own branches were never
+# exercised — a test suite that would pass even if fetch_my_squad_summary
+# were completely broken. It must NEVER raise; each branch below is
+# monkeypatched at the `fpl_client`/`get_entry_id`/`fetch_my_squad` seam
+# fetch_my_squad_summary itself calls, no network.
+# ---------------------------------------------------------------------------
+
+
+def _entry_summary(entry_id: int, team_name: str = "Test FC") -> EntrySummary:
+    return EntrySummary(
+        entry_id=entry_id,
+        team_name=team_name,
+        player_first_name="Test",
+        player_last_name="Manager",
+        summary_overall_rank=12345,
+        summary_overall_points=100,
+        started_event=1,
+        last_deadline_bank=0,
+        last_deadline_value=1000,
+    )
+
+
+class TestFetchMySquadSummary:
+    @pytest.fixture(autouse=True)
+    def _no_dotenv(self, monkeypatch) -> None:
+        """`get_entry_id` calls `load_dotenv()` on every invocation. There is
+        no `.env` in this repo/worktree, but neutering it keeps this class's
+        env-var tests independent of whatever happens to be on disk wherever
+        the suite runs. Scoped to this class only — no other test here goes
+        near `get_entry_id`."""
+        monkeypatch.setattr("fpl_oracle.fpl.entry.load_dotenv", lambda: None)
+
+    def test_entry_id_unset_returns_none_with_a_note(self, monkeypatch) -> None:
+        monkeypatch.delenv("FPL_ENTRY_ID", raising=False)
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is None
+        assert "FPL_ENTRY_ID" in note
+
+    def test_entry_id_non_integer_returns_none_not_raise(self, monkeypatch) -> None:
+        # A real contract bug: get_entry_id's non-integer branch raises a
+        # bare ValueError, which sits OUTSIDE the broad except Exception in
+        # an earlier version of this function unless explicitly caught.
+        monkeypatch.setenv("FPL_ENTRY_ID", "not-a-number")
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is None
+        assert "FPL_ENTRY_ID" in note
+
+    def test_no_completed_gameweek_returns_none_with_a_note(self, monkeypatch) -> None:
+        monkeypatch.setenv("FPL_ENTRY_ID", "123")
+        monkeypatch.setattr(pipeline.fpl_client, "get_current_completed_gameweek", lambda: None)
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is None
+        assert "gameweek" in note.lower()
+
+    def test_entry_id_matches_no_manager_returns_none_with_a_note(self, monkeypatch) -> None:
+        monkeypatch.setenv("FPL_ENTRY_ID", "999999")
+        monkeypatch.setattr(pipeline.fpl_client, "get_current_completed_gameweek", lambda: 1)
+        monkeypatch.setattr(pipeline.fpl_client, "get_entry", lambda entry_id: None)
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is None
+        assert "999999" in note
+
+    def test_picks_not_public_yet_returns_none_with_a_note(self, monkeypatch) -> None:
+        monkeypatch.setenv("FPL_ENTRY_ID", "123")
+        monkeypatch.setattr(pipeline.fpl_client, "get_current_completed_gameweek", lambda: 1)
+        monkeypatch.setattr(
+            pipeline.fpl_client, "get_entry", lambda entry_id: _entry_summary(entry_id)
+        )
+        monkeypatch.setattr(pipeline, "fetch_my_squad", lambda entry_id, gameweek, player_db: None)
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is None
+        assert "GW1" in note
+        assert "public" in note
+
+    def test_network_failure_returns_none_never_raises(self, monkeypatch) -> None:
+        monkeypatch.setenv("FPL_ENTRY_ID", "123")
+
+        def boom():
+            raise RuntimeError("connection reset by peer")
+
+        monkeypatch.setattr(pipeline.fpl_client, "get_current_completed_gameweek", boom)
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is None
+        assert "connection reset by peer" in note

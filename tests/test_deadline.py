@@ -232,6 +232,32 @@ class TestStageSkipping:
 # ---------------------------------------------------------------------------
 
 
+class TestSkipCountReporting:
+    """`skip_count` distinguishes creators whose extraction was reused from
+    disk (the skip-if-recent guard) from ones freshly extracted this run —
+    an operator watching a retry needs to be able to tell "13 creators
+    extracted" from "13 creators reused", not just see one combined total."""
+
+    def test_skips_reported_distinctly_from_fresh_extractions(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        _patch_happy_path(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            deadline,
+            "run_extraction",
+            lambda *a, **k: _fake_extract_summary(
+                tmp_path / "mq.md", attempted=18, succeeded=18, failures=[], skip_count=13
+            ),
+        )
+
+        rc = deadline.main(["--skip-ingest", "--no-nuance"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "18/18 creators" in out
+        assert "13 skipped/reused" in out
+
+
 class TestVideoRefreshWiring:
     def test_extract_stage_forces_a_fresh_uploads_listing(
         self, monkeypatch, tmp_path: Path
