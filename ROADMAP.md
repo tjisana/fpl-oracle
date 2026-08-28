@@ -60,9 +60,16 @@ is it worth -4?" Different objective, much smaller search space.
       If the transcript cache doesn't survive between runs, every run re-fetches the
       whole season and gets IP-blocked. This is a precondition, not an optimization.
 - [ ] **Split the pipeline at the cache boundary** (recommended, £0): fetch transcripts
-      on a local machine (residential IP, never blocked) → sync to S3; run extract →
-      solve → report in the cloud. Fallback: Webshare *residential* proxy ~$3.50/mo.
-      Verify with `scratchpad/yt_block_probe.py` from an EC2 box before building.
+      on a local machine → sync to S3; run extract → solve → report in the cloud.
+      "residential IP, never blocked" was the original reasoning here — TESTED and
+      FALSIFIED on 2026-08-27 (this machine, a residential IP, was IP-blocked for
+      hours after a burst harvest). A residential IP still lowers block risk vs. a
+      shared cloud IP, but "never" was wrong and rate matters more than IP class at
+      our volume. See `docs/transcript-blocking.md` for the full incident writeup,
+      the proxy-vs-pacing recommendation (don't buy a proxy yet), and how to
+      configure `WebshareProxyConfig` support (already wired, off by default) if it
+      later becomes warranted. Verify with `scratchpad/yt_block_probe.py` from an
+      EC2 box before building.
 - [ ] **Web app** (single-user, no auth). Four screens worth building:
       1. Action queue — ranked "do this by then", with TWO clocks (nightly price
          change ~01:30 UTC, and the gameweek deadline).
@@ -78,9 +85,15 @@ is it worth -4?" Different objective, much smaller search space.
 ## KNOWN ISSUES
 
 - [ ] **YouTube IP-blocks under burst load** — harvesting ~34 transcripts in
-      one go tripped an `IpBlocked` on 2026-08-27. `warm_cache` stops the run
-      on the first block rather than hammering it. Needs rate limiting, or the
-      residential-proxy path already noted under deployment.
+      one go tripped an `IpBlocked` on 2026-08-27. Block was confirmed still
+      active 3h30m+ later. `warm_cache` stops the run on the first block
+      rather than hammering it, and now paces network fetches (`--delay`,
+      default 2.0s ±40% jitter) plus a consecutive-failure circuit breaker.
+      `scripts/retry_blocked_transcripts.sh` now backs off exponentially
+      (20m/40m/80m/120m-cap) instead of a flat 20-minute probe interval.
+      Optional proxy support is wired into `ingest/transcripts.py` (off by
+      default). Full writeup, and why we're not buying a proxy yet, in
+      `docs/transcript-blocking.md`.
 - [ ] **A creator whose only content is titled for the PREVIOUS gameweek is
       dropped.** `is_gameweek_video` rejects an explicit wrong-gameweek number
       outright, which cost us fpl-family for GW2 ("FPL GW1 Review + BIG
