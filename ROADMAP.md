@@ -156,14 +156,14 @@ is it worth -4?" Different objective, much smaller search space.
       Transfers Incoming"). Deliberate — the alternative is picking up stale
       videos — but revisit if it keeps costing real creators.
 
-- [ ] **Phonetic name mangles still unresolved** — MAY BE DISSOLVED by the
-      Gemini shift above: it reads names off on-screen graphics rather than
-      guessing phonetically, and scored 96.1% vs 80.5% resolution on real GW2
-      videos. Evaluate that before investing further in the resolver.
-- [ ] _(original)_ **Phonetic name mangles** — ~71 of 478 picks. `'Virgil van Djk'`,
-      `'Dominic Calvalu'`, `'In Burmo'`, `'Victor Yres'`. First-name references were
-      fixed (`b12e4a1`); this is the remaining class. Re-run `scripts/name_probe.py`
-      after any resolver change — it is the safety net.
+- [ ] **Phonetic name mangles still unresolved** — ~71 of 478 picks.
+      `'Virgil van Djk'`, `'Dominic Calvalu'`, `'In Burmo'`, `'Victor Yres'`.
+      First-name references were fixed (`b12e4a1`); this is the remaining class.
+      Re-run `scripts/name_probe.py` after any resolver change — it is the safety net.
+      **MAY BE DISSOLVED ENTIRELY** by the Gemini shift above, which reads names off
+      on-screen graphics instead of guessing phonetically: 96.1% vs 80.5% resolution
+      on real GW2 videos. Settle that question before investing further in the
+      resolver — this class of bug may not be worth fixing twice.
 - [ ] **Uneven resolution across creators** distorts weighting: FPL Salah loses 41%
       of picks to name resolution, Gianni Buttice 0%.
 - [x] ~~**Re-extraction re-pays for creators already done**~~ — FIXED. `run_extract`
