@@ -44,7 +44,7 @@ from fpl_oracle.consensus.scoring import PlayerScore
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict
 from fpl_oracle.fpl.players import Player, Position
 from fpl_oracle.fpl.selling import SquadPricing
-from fpl_oracle.solver.squad import coefficient
+from fpl_oracle.solver.squad import BENCH_WEIGHT, coefficient
 
 MAX_PER_CLUB = 3
 
@@ -105,8 +105,17 @@ class CandidateMove(BaseModel):
     )
     out_availability: Availability
     in_availability: Availability
+    out_is_starting: bool = Field(
+        default=True, description="the outgoing player was in the starting XI, not on the bench"
+    )
     forced: bool = Field(
-        default=False, description="the outgoing player is EXCLUDED — this move fixes a hole"
+        default=False,
+        description=(
+            "the outgoing player is EXCLUDED *and* was starting — this move fixes a real "
+            "hole in the XI. An EXCLUDED player on the BENCH is not forced: they cost "
+            "nothing but autosub cover, and spending the free transfer there instead of on "
+            "a genuine upgrade is usually the worse move."
+        ),
     )
     notes: list[str] = Field(default_factory=list)
 
@@ -217,6 +226,7 @@ def build_moves(
     scores: dict[int, PlayerScore],
     verdicts: dict[int, AvailabilityVerdict],
     pricing: SquadPricing,
+    starting_player_ids: set[int] | None = None,
 ) -> list[CandidateMove]:
     """Every legal single transfer, ranked best-first by coefficient delta.
 
@@ -227,6 +237,9 @@ def build_moves(
     UNVERIFIED rather than assumed when the derivation didn't reconcile.
     """
     owned_ids = {p.player_id for p in owned}
+    # Absent XI information, treat everyone as starting — the conservative
+    # reading, since it can only make an exclusion look MORE urgent.
+    starting = owned_ids if starting_player_ids is None else starting_player_ids
     counts = _club_counts(owned)
     moves: list[CandidateMove] = []
 
@@ -263,6 +276,17 @@ def build_moves(
             in_score = scores.get(in_player.player_id)
             in_coef = coefficient(in_player, in_score, in_mult)
 
+            # Weight the swap by where the outgoing player actually sits.
+            # Only 11 players score, so an improvement to a bench slot is
+            # worth a fraction of the same improvement to the XI — and
+            # without this an EXCLUDED bench player's crushed coefficient
+            # produces a huge delta for fixing something that costs
+            # nothing but autosub cover. Reuses the solver's own
+            # BENCH_WEIGHT rather than inventing a second bench theory.
+            out_starts = out_player.player_id in starting
+            weight = 1.0 if out_starts else BENCH_WEIGHT
+            delta = (in_coef - out_coef) * weight
+
             notes: list[str] = []
             if affordability is Affordability.UNVERIFIED:
                 notes.append(
@@ -276,7 +300,7 @@ def build_moves(
                     in_player_id=in_player.player_id,
                     in_name=in_player.web_name,
                     position=out_player.position,
-                    delta=in_coef - out_coef,
+                    delta=delta,
                     price_delta_m=in_player.price_m - out_player.price_m,
                     consensus_delta=(in_score.band_score if in_score else 0.0)
                     - (out_score.band_score if out_score else 0.0),
@@ -288,7 +312,10 @@ def build_moves(
                     budget_m=None if budget is None else budget / 10,
                     out_availability=out_avail,
                     in_availability=in_avail,
-                    forced=out_avail is Availability.EXCLUDED,
+                    out_is_starting=out_player.player_id in starting,
+                    forced=(
+                        out_avail is Availability.EXCLUDED and out_player.player_id in starting
+                    ),
                     notes=notes,
                 )
             )
@@ -342,6 +369,7 @@ def recommend_transfer(
     pricing: SquadPricing,
     free_transfers: int | None,
     gameweek: int | None = None,
+    starting_player_ids: set[int] | None = None,
 ) -> TransferRecommendation:
     """The whole decision: roll, use the free transfer, or fix a hole.
 
@@ -354,11 +382,25 @@ def recommend_transfer(
         free_transfers = 1
         ft_note = " Free-transfer count could not be derived; assuming 1 (the guaranteed minimum)."
 
-    moves = build_moves(owned=owned, pool=pool, scores=scores, verdicts=verdicts, pricing=pricing)
+    moves = build_moves(
+        owned=owned,
+        pool=pool,
+        scores=scores,
+        verdicts=verdicts,
+        pricing=pricing,
+        starting_player_ids=starting_player_ids,
+    )
+    starting = {p.player_id for p in owned} if starting_player_ids is None else starting_player_ids
     unavailable = [
         p.web_name
         for p in owned
         if _availability_of(p.player_id, verdicts)[0] is Availability.EXCLUDED
+    ]
+    benched_unavailable = [
+        p.web_name
+        for p in owned
+        if _availability_of(p.player_id, verdicts)[0] is Availability.EXCLUDED
+        and p.player_id not in starting
     ]
     forced = [m for m in moves if m.forced]
     shortlist = best_per_outgoing(moves, SHORTLIST_SIZE)
@@ -395,12 +437,22 @@ def recommend_transfer(
             hit_candidates=_hit_candidates([m for m in moves if not m.forced]),
             delta_distribution=_distribution(moves, cleared=True),
             reasoning=(
-                f"{best_forced.out_name} is unavailable, so this is a move forced by facts "
+                f"{best_forced.out_name} is unavailable AND in your starting XI, so this is "
+                f"a move forced by facts "
                 f"rather than a judgement call on form. Best available replacement is "
                 f"{best_forced.in_name} ({best_forced.in_backers} creator backers)." + ft_note
             ),
             pricing_note=pricing.note,
             unavailable_owned=unavailable,
+        )
+
+    bench_note = ""
+    if benched_unavailable:
+        bench_note = (
+            f" Note: {', '.join(benched_unavailable)} unavailable but BENCHED — that costs "
+            f"autosub cover, not points, so it does not force a transfer. Their swaps rank "
+            f"high only because unavailability crushes their coefficient; weigh that against "
+            f"upgrading a starter."
         )
 
     best = moves[0]
@@ -426,6 +478,7 @@ def recommend_transfer(
                     else ""
                 )
                 + "."
+                + bench_note
                 + ft_note
             ),
             pricing_note=pricing.note,
@@ -457,7 +510,7 @@ def recommend_transfer(
         delta_distribution=_distribution(moves, cleared=False),
         reasoning=(
             f"Roll the transfer: {why}. Banking it leaves "
-            f"{min(free_transfers + 1, 5)} for next gameweek." + ft_note
+            f"{min(free_transfers + 1, 5)} for next gameweek." + bench_note + ft_note
         ),
         pricing_note=pricing.note,
         unavailable_owned=unavailable,

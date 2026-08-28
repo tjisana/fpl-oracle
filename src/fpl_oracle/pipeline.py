@@ -882,6 +882,7 @@ def _recommend_transfer_for(
         reported_squad_value=my_squad.team_value,
     )
     return recommend_transfer(
+        starting_player_ids={p.player_id for p in my_squad.players if p.is_starting},
         owned=owned,
         pool=pool,
         scores=scores,

@@ -352,3 +352,82 @@ class TestNeverPricesAHit:
         assert rec.verdict is Verdict.ROLL
         assert rec.worth_considering
         assert rec.worth_considering[0].in_name == "Great"
+
+
+class TestBenchedUnavailableDoesNotForceAMove:
+    """Found on the real GW2 run. Chiesa was injured on the BENCH, and the
+    recommender called it a FORCED_MOVE — proposing to spend the only free
+    transfer on a player whose absence costs autosub cover and nothing
+    else, while a 1-backer starter sat next to a 5-backer replacement.
+
+    An unavailable player only forces a transfer when they are in the XI,
+    because that is when the squad cannot field 11 who will play."""
+
+    def test_benched_unavailable_player_does_not_force(self) -> None:
+        owned = [
+            _player(1, "BenchInjured", Position.MID, 50),
+            _player(2, "Starter", Position.MID, 50),
+        ]
+        pool = [_player(3, "Sub", Position.MID, 50)]
+        rec = recommend_transfer(
+            owned=owned,
+            pool=pool,
+            scores={3: _score(3, 0.9, backers=4)},
+            verdicts={1: _excluded(1)},
+            pricing=_pricing(owned),
+            free_transfers=1,
+            starting_player_ids={2},  # player 1 is on the bench
+        )
+        assert rec.verdict is not Verdict.FORCED_MOVE
+
+    def test_the_benched_case_is_explained_not_hidden(self) -> None:
+        owned = [
+            _player(1, "BenchInjured", Position.MID, 50),
+            _player(2, "Starter", Position.MID, 50),
+        ]
+        pool = [_player(3, "Sub", Position.MID, 50)]
+        rec = recommend_transfer(
+            owned=owned,
+            pool=pool,
+            scores={3: _score(3, 0.5, backers=1)},
+            verdicts={1: _excluded(1)},
+            pricing=_pricing(owned),
+            free_transfers=1,
+            starting_player_ids={2},
+        )
+        assert "BENCHED" in rec.reasoning
+        assert "BenchInjured" in rec.unavailable_owned
+
+    def test_an_unavailable_STARTER_still_forces(self) -> None:
+        owned = [
+            _player(1, "StarterInjured", Position.MID, 50),
+            _player(2, "Fine", Position.MID, 50),
+        ]
+        pool = [_player(3, "Sub", Position.MID, 50)]
+        rec = recommend_transfer(
+            owned=owned,
+            pool=pool,
+            scores={3: _score(3, 0.9, backers=4)},
+            verdicts={1: _excluded(1)},
+            pricing=_pricing(owned),
+            free_transfers=1,
+            starting_player_ids={1, 2},
+        )
+        assert rec.verdict is Verdict.FORCED_MOVE
+        assert rec.recommended is not None
+        assert rec.recommended.out_name == "StarterInjured"
+
+    def test_absent_xi_information_is_conservative(self) -> None:
+        """With no XI data, assume everyone starts — that can only make an
+        exclusion look more urgent, never less."""
+        owned = [_player(1, "Injured", Position.MID, 50)]
+        pool = [_player(2, "Sub", Position.MID, 50)]
+        rec = recommend_transfer(
+            owned=owned,
+            pool=pool,
+            scores={2: _score(2, 0.9, backers=4)},
+            verdicts={1: _excluded(1)},
+            pricing=_pricing(owned),
+            free_transfers=1,
+        )
+        assert rec.verdict is Verdict.FORCED_MOVE
