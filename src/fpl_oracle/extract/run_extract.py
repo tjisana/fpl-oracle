@@ -33,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 import anthropic
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from youtube_transcript_api import RequestBlocked, YouTubeRequestFailed
 
 from fpl_oracle.extract.extractor import ExtractionError, extract_picks
@@ -44,7 +44,7 @@ from fpl_oracle.ingest.run_ingest import (
     filter_min_duration,
     videos_for_creator,
 )
-from fpl_oracle.ingest.transcripts import fetch_transcript
+from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript, load_transcript
 from fpl_oracle.ingest.youtube_client import (
     VideoInfo,
     YouTubeApiError,
@@ -269,10 +269,17 @@ def pick_gameweek_video(
     gameweek: int,
     published_after: datetime | None,
     force_refresh: bool = False,
-) -> VideoInfo | None:
-    """Most recent `gameweek`-qualifying, non-Short video attributed to
-    `creator` — see `is_gameweek_video` for the explicit-vs-generic match
-    rule and what `published_after` gates.
+) -> list[VideoInfo]:
+    """`gameweek`-qualifying, non-Short videos attributed to `creator`,
+    NEWEST FIRST — see `is_gameweek_video` for the explicit-vs-generic
+    match rule and what `published_after` gates.
+
+    Returns the ranked list rather than just the winner so the caller can
+    fall back down it. The newest video is the right first choice, but
+    "newest" and "reachable" are different things: on a YouTube IP block
+    an uncached newest video loses the creator entirely, even when an
+    older cached team reveal is sitting on disk. That happened for real
+    on the GW2 run.
 
     `force_refresh` bypasses the uploads-listing cache — see
     `list_recent_videos`. Needed on deadline morning, when the video that
@@ -299,7 +306,7 @@ def pick_gameweek_video(
             v.title, gameweek, published_at=v.published_at, published_after=published_after
         )
     ]
-    return candidates[0] if candidates else None
+    return candidates
 
 
 class VideoSelection(BaseModel):
@@ -307,6 +314,24 @@ class VideoSelection(BaseModel):
     shared unit between `run_extraction`'s selection phase and
     `--dry-run`, which stops here, before any transcript fetch or Claude
     call."""
+
+    candidates: list[VideoInfo] = Field(
+        default_factory=list,
+        description=(
+            "every qualifying video, newest first. `video` is the newest; the rest are "
+            "fallbacks for when it cannot be read (see `_resolve_transcript`)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _default_candidates_to_the_chosen_video(self) -> VideoSelection:
+        """Keep `candidates` and `video` consistent in one place, so a
+        caller that only knows about `video` (every pre-fallback caller,
+        and every existing test) still yields a usable one-element chain
+        rather than silently selecting nothing."""
+        if not self.candidates and self.video is not None:
+            self.candidates = [self.video]
+        return self
 
     creator: Creator
     video: VideoInfo | None
@@ -335,15 +360,86 @@ def select_videos(
     selections = []
     for creator in creators:
         try:
-            video = pick_gameweek_video(
+            candidates = pick_gameweek_video(
                 creator, REGISTRY, gameweek, published_after, force_refresh=force_refresh
             )
         except YouTubeApiError as e:
             logger.warning("run_extract: %s — video listing failed: %s", creator.creator_id, e)
             selections.append(VideoSelection(creator=creator, video=None, error=str(e)))
             continue
-        selections.append(VideoSelection(creator=creator, video=video, error=None))
+        selections.append(
+            VideoSelection(
+                creator=creator,
+                video=candidates[0] if candidates else None,
+                candidates=candidates,
+                error=None,
+            )
+        )
     return selections
+
+
+def _reuse_existing(
+    video: VideoInfo, output_dir: Path, force: bool, creator_id: str
+) -> ResolvedExtraction | None:
+    """The stored extraction for `video`, if one exists and is readable.
+
+    A truncated or corrupt file must NOT abort the run: this read used to
+    sit outside the extraction try/except, so an uncaught ValidationError
+    escaped run_extraction entirely and `deadline.py` reported STAGE
+    FAILED — losing every creator not yet processed, and doing it again on
+    every retry until a human deleted the file. Treat it as a cache miss.
+    """
+    path = output_dir / f"{video.video_id}.json"
+    if force or not path.exists():
+        return None
+    try:
+        return ResolvedExtraction.model_validate_json(path.read_text())
+    except (ValidationError, OSError) as e:
+        logger.warning(
+            "run_extract: %s — cached extraction %s is unreadable (%s); re-extracting",
+            creator_id,
+            path.name,
+            type(e).__name__,
+        )
+        return None
+
+
+def _resolve_transcript(
+    candidates: list[VideoInfo], creator_id: str
+) -> tuple[VideoInfo | None, Transcript | None, bool]:
+    """Walk `candidates` newest-first and return the first (video,
+    transcript) pair we can actually read, plus whether a block was hit.
+
+    NEWEST IS NOT ALWAYS REACHABLE. On the GW2 run, gianni-buttice's
+    newest video was uncached, YouTube was blocking, and the creator was
+    lost outright — while five older cached GW2 videos of his, including a
+    deadline-day team reveal, sat on disk.
+
+    Once a block is seen we stop making network calls for this creator and
+    consider only videos already on disk. That is the important
+    constraint: falling back must never mean throwing MORE requests at an
+    active block, which is what prolongs it.
+    """
+    blocked = False
+    for video in candidates:
+        cached = load_transcript(video.video_id)
+        if cached is not None:
+            return video, cached, blocked
+        if blocked:
+            continue  # network is off-limits; keep scanning for a cached one
+        try:
+            fetched = fetch_transcript(video.video_id)
+        except (RequestBlocked, YouTubeRequestFailed) as e:
+            logger.warning(
+                "run_extract: %s — transcript BLOCKED (%s); falling back to cached videos only",
+                creator_id,
+                type(e).__name__,
+            )
+            blocked = True
+            continue
+        if fetched is not None:
+            return video, fetched, blocked
+    return None, None, blocked
 
 
 def render_match_quality(resolved: list[ResolvedExtraction], gameweek: int) -> str:
@@ -461,68 +557,63 @@ def run_extraction(
             if sel.error is not None:
                 failures.append((creator.creator_id, f"video listing failed: {sel.error}"))
                 continue
-            video = sel.video
-            if video is None:
+            if not sel.candidates:
                 logger.info(
                     "run_extract: %s — no gameweek %d video found", creator.creator_id, gameweek
                 )
                 failures.append((creator.creator_id, f"no gameweek {gameweek} video found"))
                 continue
 
-            extraction_path = output_dir / f"{video.video_id}.json"
-            reused: ResolvedExtraction | None = None
-            if extraction_path.exists() and not force:
-                # A truncated or corrupt file here must NOT abort the run.
-                # This read sits outside the extraction try/except below, so
-                # an uncaught ValidationError escapes run_extraction entirely
-                # and `deadline.py` reports STAGE FAILED — losing every
-                # creator not yet processed, and doing it again on every
-                # retry until a human deletes the file. Writes are not
-                # atomic, so a Ctrl-C or a sleeping laptop mid-run produces
-                # exactly this. Treat it as a cache miss and re-extract.
-                try:
-                    reused = ResolvedExtraction.model_validate_json(extraction_path.read_text())
-                except (ValidationError, OSError) as e:
-                    logger.warning(
-                        "run_extract: %s — cached extraction %s is unreadable (%s); re-extracting",
-                        creator.creator_id,
-                        extraction_path.name,
-                        type(e).__name__,
-                    )
+            # Skip-check the NEWEST candidate before touching the network:
+            # a warm skip must cost nothing at all, not even a cached
+            # transcript read.
+            newest = sel.candidates[0]
+            reused = _reuse_existing(newest, output_dir, force, creator.creator_id)
             if reused is not None:
-                r = reused
                 skipped.append(creator.creator_id)
                 logger.info(
                     "run_extract: %s — SKIPPED (existing extraction for %s reused; "
                     "pass --force to re-extract)",
                     creator.creator_id,
-                    video.video_id,
+                    newest.video_id,
                 )
-                resolved.append(r)
+                resolved.append(reused)
                 continue
 
-            # A blocked IP must not take down a PAID run. fetch_transcript
-            # re-raises RequestBlocked/YouTubeRequestFailed deliberately —
-            # they are environmental, not facts about one video — but here
-            # that would escape the per-creator loop, abort run_extraction,
-            # and lose every creator not yet processed while still having
-            # paid for the ones already done. Record it and move on; the
-            # cached transcripts other creators already have are unaffected.
-            try:
-                transcript = fetch_transcript(video.video_id)
-            except (RequestBlocked, YouTubeRequestFailed) as e:
-                logger.warning(
-                    "run_extract: %s — transcript BLOCKED (%s); skipping this creator, "
-                    "the run continues",
-                    creator.creator_id,
-                    type(e).__name__,
+            video, transcript, was_blocked = _resolve_transcript(sel.candidates, creator.creator_id)
+            if video is None or transcript is None:
+                reason = (
+                    "transcript blocked and no cached fallback"
+                    if was_blocked
+                    else "no transcript for any qualifying video"
                 )
-                failures.append((creator.creator_id, f"transcript blocked ({type(e).__name__})"))
-                blocked_creators.append(creator.creator_id)
+                failures.append((creator.creator_id, reason))
+                if was_blocked:
+                    blocked_creators.append(creator.creator_id)
                 continue
-            if transcript is None:
-                failures.append((creator.creator_id, f"no transcript for video {video.video_id}"))
-                continue
+            if video.video_id != sel.candidates[0].video_id:
+                logger.info(
+                    "run_extract: %s — newest video unreadable; using cached %r (%s)",
+                    creator.creator_id,
+                    video.title,
+                    video.published_at.date(),
+                )
+
+            # The fallback may have landed on an older video we already
+            # extracted; re-checking here stops the fallback path re-paying.
+            if video.video_id != newest.video_id:
+                reused = _reuse_existing(video, output_dir, force, creator.creator_id)
+                if reused is not None:
+                    skipped.append(creator.creator_id)
+                    logger.info(
+                        "run_extract: %s — SKIPPED (fallback video %s already extracted)",
+                        creator.creator_id,
+                        video.video_id,
+                    )
+                    resolved.append(reused)
+                    continue
+            extraction_path = output_dir / f"{video.video_id}.json"
+
             try:
                 extraction = extract_picks(
                     creator_id=creator.creator_id,
