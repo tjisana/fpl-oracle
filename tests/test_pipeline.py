@@ -627,6 +627,179 @@ class TestBootstrapFetchedAt:
         record = RunRecord.model_validate_json(old_json)
         assert record.bootstrap_fetched_at is None
         assert record.inputs[0].published_at is None
+        assert record.my_squad is None
+        assert record.my_squad_note == ""
+
+
+# ---------------------------------------------------------------------------
+# Job 2 (ROADMAP.md "My-squad awareness"): my-squad wiring. `my_squad_fn`
+# is OPT-IN at the `run_pipeline` level (mirrors `nuance_fn`) so every
+# other test in this module — none of which pass it — keeps getting
+# `my_squad=None` without touching the network; only `main()` wires the
+# real fetch in by default. See `fetch_my_squad_summary`'s own module
+# docstring for the network-touching implementation (untested here,
+# by design — these tests only exercise the seam).
+# ---------------------------------------------------------------------------
+
+
+def _owned_player(player_id: int, position: Position, is_starting: bool = True):
+    from fpl_oracle.fpl.entry import OwnedPlayer
+
+    return OwnedPlayer(
+        player_id=player_id,
+        web_name=f"P{player_id}",
+        position=position,
+        is_starting=is_starting,
+        is_captain=False,
+        is_vice_captain=False,
+        multiplier=1 if is_starting else 0,
+        purchase_price=None,
+        selling_price=None,
+    )
+
+
+def _fake_my_squad_summary():
+    from fpl_oracle.fpl.client import LeagueStanding
+    from fpl_oracle.pipeline import MySquadSummary
+
+    return MySquadSummary(
+        entry_id=12345,
+        team_name="Test FC",
+        gameweek=1,
+        players=[_owned_player(1, Position.GK)],
+        bank=5,
+        team_value=1000,
+        free_transfers=1,
+        free_transfers_note="test derivation",
+        overall_rank=50000,
+        overall_points=60,
+        private_leagues=[
+            LeagueStanding(
+                league_id=99,
+                name="Rainmakers",
+                league_type="x",
+                entry_rank=2,
+                entry_last_rank=2,
+                rank_count=2,
+            )
+        ],
+    )
+
+
+class TestMySquadWiring:
+    def test_default_omits_my_squad_and_never_touches_the_network(self, tmp_path: Path) -> None:
+        db = _make_db(_legal_pool())
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[],
+            report_fn=_fake_report_fn,
+        )
+
+        assert result.record.my_squad is None
+        assert result.record.my_squad_note == "my-squad fetch not requested for this run"
+
+    def test_injected_my_squad_fn_populates_the_run_record(self, tmp_path: Path) -> None:
+        db = _make_db(_legal_pool())
+        captured_db: list[PlayerDB] = []
+
+        def fake_my_squad_fn(player_db: PlayerDB):
+            captured_db.append(player_db)
+            return _fake_my_squad_summary(), "fetched squad for GW1"
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[],
+            report_fn=_fake_report_fn,
+            my_squad_fn=fake_my_squad_fn,
+        )
+
+        assert result.record.my_squad is not None
+        assert result.record.my_squad.entry_id == 12345
+        assert result.record.my_squad.team_name == "Test FC"
+        assert result.record.my_squad.free_transfers == 1
+        assert result.record.my_squad.overall_rank == 50000
+        assert result.record.my_squad.overall_points == 60
+        assert [lg.name for lg in result.record.my_squad.private_leagues] == ["Rainmakers"]
+        assert result.record.my_squad_note == "fetched squad for GW1"
+        # the fetch was handed the SAME PlayerDB the solver used, not a
+        # separately loaded one.
+        assert captured_db == [db]
+
+    def test_my_squad_absent_none_note_recorded(self, tmp_path: Path) -> None:
+        # A realistic "degrade gracefully" case: the real fetch function
+        # returns (None, note) itself (e.g. FPL_ENTRY_ID unset) — this
+        # must round-trip onto the run record exactly, and the run must
+        # still complete.
+        def fake_my_squad_fn(player_db: PlayerDB):
+            return None, "FPL_ENTRY_ID not configured — my-squad section skipped"
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=_make_db(_legal_pool()),
+            registry=[],
+            report_fn=_fake_report_fn,
+            my_squad_fn=fake_my_squad_fn,
+        )
+
+        assert result.record.my_squad is None
+        assert (
+            result.record.my_squad_note == "FPL_ENTRY_ID not configured — my-squad section skipped"
+        )
+        assert result.report_path is not None
+
+    def test_my_squad_fn_raising_is_non_fatal(self, tmp_path: Path) -> None:
+        def failing_my_squad_fn(player_db: PlayerDB):
+            raise RuntimeError("network exploded")
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=_make_db(_legal_pool()),
+            registry=[],
+            report_fn=_fake_report_fn,
+            my_squad_fn=failing_my_squad_fn,
+        )
+
+        assert result.record.my_squad is None
+        assert "network exploded" in result.record.my_squad_note
+        assert result.report_path is not None
+        assert (result.run_dir / "run.json").exists()
+
+    def test_my_squad_never_changes_the_solved_squad_or_captain(self, tmp_path: Path) -> None:
+        """CRITICAL requirement from the task spec: my-squad is purely
+        observational. The same inputs must solve to the exact same squad
+        and captain whether or not my_squad_fn is supplied."""
+        extractions = tmp_path / "extractions"
+        extractions.mkdir()
+        _write_extraction(extractions, "andy", "v1", [_pick(1), _pick(2)])
+        db = _make_db(_legal_pool())
+
+        baseline = run_pipeline(
+            extractions_dir=extractions,
+            runs_dir=tmp_path / "runs_baseline",
+            player_db=db,
+            registry=[_creator("andy")],
+            report_fn=_fake_report_fn,
+        )
+        with_my_squad = run_pipeline(
+            extractions_dir=extractions,
+            runs_dir=tmp_path / "runs_with_my_squad",
+            player_db=db,
+            registry=[_creator("andy")],
+            report_fn=_fake_report_fn,
+            my_squad_fn=lambda player_db: (_fake_my_squad_summary(), "fetched squad for GW1"),
+        )
+
+        baseline_ids = {p.player_id for p in baseline.squad.players}
+        with_my_squad_ids = {p.player_id for p in with_my_squad.squad.players}
+        assert baseline_ids == with_my_squad_ids
+        assert baseline.record.solver == with_my_squad.record.solver
 
 
 class TestPipelineResultDiffAndAvailability:
