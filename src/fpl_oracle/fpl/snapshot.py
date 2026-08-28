@@ -35,7 +35,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from fpl_oracle.fpl.client import get_bootstrap_static, get_transfers
+from fpl_oracle.fpl.client import get_bootstrap_static, get_entry_history, get_transfers
 from fpl_oracle.logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,14 @@ class PurchasePrices(BaseModel):
     before the player could be re-bought, so only the most recent one
     describes what's currently held).
 
+    `known` is NOT the same set as "players currently owned". It also
+    holds anyone transferred IN and later transferred back OUT: the log
+    records the purchase, and nothing in the log marks it as no longer
+    held. Intersect with `fpl.entry.fetch_my_squad`'s player ids before
+    treating an entry as a price the manager is actually carrying.
+    Transfers made in a Free Hit gameweek are excluded entirely, since a
+    Free Hit squad is reverted afterwards.
+
     Anyone NOT a key of `known` — a player held since the manager's
     INITIAL squad and never transferred since — is UNKNOWN: their
     purchase price isn't in the transfer log at all, because they were
@@ -143,14 +151,16 @@ class PurchasePrices(BaseModel):
     """
 
     known: dict[int, int]
-    unknown_note: str = Field(
-        default=(
+    unknown_note: str = Field(default_factory=lambda: PurchasePrices.default_note())
+
+    @staticmethod
+    def default_note() -> str:
+        return (
             "any owned player not in `known` was never transferred in this season — "
             "held since the initial squad. Resolving those needs a price snapshot from "
             "on-or-before initial squad selection, which snapshot.py does not yet have "
             "enough history to provide; never guessed or backfilled from now_cost."
         )
-    )
 
 
 def derive_purchase_prices(entry_id: int) -> PurchasePrices:
@@ -161,13 +171,33 @@ def derive_purchase_prices(entry_id: int) -> PurchasePrices:
     initial-squad players are left `unknown`.
     """
     transfers = get_transfers(entry_id)
+
+    # FREE HIT TRANSFERS MUST BE EXCLUDED. A Free Hit squad is reverted
+    # after its gameweek, so those transfers appear in the log but say
+    # nothing about what the manager owns or what they paid. Counting
+    # them asserts a purchase price for a player who was handed straight
+    # back — and, worse, OVERWRITES a genuine earlier purchase, because
+    # latest-transfer-in wins. Wildcard transfers are permanent and stay.
+    history = get_entry_history(entry_id)
+    free_hit_events = (
+        {c.event for c in history.chips if c.name == "freehit"} if history is not None else set()
+    )
+    history_note = ""
+    if history is None:
+        history_note = (
+            " Entry history was unavailable, so Free Hit gameweeks could not be identified; "
+            "if a Free Hit was played, some entries may reflect a reverted transfer."
+        )
+
     known: dict[int, int] = {}
     for t in transfers:
+        if t.event in free_hit_events:
+            continue
         # Oldest-first input means a later `element_in` for the same
         # player id simply overwrites an earlier one here — exactly the
         # "latest transfer-in wins" rule the docstring describes.
         known[t.element_in] = t.element_in_cost
-    return PurchasePrices(known=known)
+    return PurchasePrices(known=known, unknown_note=PurchasePrices.default_note() + history_note)
 
 
 def main(argv: list[str] | None = None) -> int:
