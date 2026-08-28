@@ -33,12 +33,52 @@ HEADERS = {
 _BOOTSTRAP_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 
 
+class LeagueStanding(BaseModel):
+    """One entry of `entry/{id}/`'s `leagues.classic[]` or `leagues.h2h[]`
+    array: the manager's standing in one league. `league_type` is the raw
+    API code — "s" for a system/global league (the "Overall" and
+    per-gameweek pseudo-leagues every manager is auto-enrolled in — noise
+    for this purpose) and "x" for a private league someone actually
+    created and the owner cares about; see `EntrySummary.private_leagues`.
+    `entry_rank`/`entry_last_rank` are `None` before a gameweek has been
+    scored (pre-season, or a brand-new league) — never fabricated."""
+
+    league_id: int
+    name: str
+    league_type: str
+    entry_rank: int | None
+    entry_last_rank: int | None
+    rank_count: int | None
+
+    @property
+    def is_private(self) -> bool:
+        return self.league_type == "x"
+
+
+def _parse_league_standings(entries: list[dict]) -> list[LeagueStanding]:
+    return [
+        LeagueStanding(
+            league_id=e["id"],
+            name=e["name"],
+            league_type=e.get("league_type", ""),
+            entry_rank=e.get("entry_rank"),
+            entry_last_rank=e.get("entry_last_rank"),
+            rank_count=e.get("rank_count"),
+        )
+        for e in entries
+    ]
+
+
 class EntrySummary(BaseModel):
     entry_id: int
     team_name: str
     player_first_name: str
     player_last_name: str
     summary_overall_rank: int | None
+    # The season points total. `None` pre-season / before any gameweek has
+    # been scored for this entry — same defensive posture as
+    # `summary_overall_rank`, never fabricated as 0.
+    summary_overall_points: int | None
     started_event: int
     # Team value and bank as of the manager's most recent deadline, in
     # tenths of a million (matching `now_cost`'s convention) — `None`
@@ -47,6 +87,11 @@ class EntrySummary(BaseModel):
     # current selling-adjusted worth), not a per-player figure.
     last_deadline_bank: int | None
     last_deadline_value: int | None
+    # Every league this entry is a member of, split the same way the API
+    # splits them. Defaults to `[]` so older cached `entry_*.json` files
+    # (fetched before this field existed) still parse.
+    leagues_classic: list[LeagueStanding] = []
+    leagues_h2h: list[LeagueStanding] = []
 
     @property
     def bank_m(self) -> float | None:
@@ -55,6 +100,14 @@ class EntrySummary(BaseModel):
     @property
     def team_value_m(self) -> float | None:
         return None if self.last_deadline_value is None else self.last_deadline_value / 10
+
+    @property
+    def private_leagues(self) -> list[LeagueStanding]:
+        """Only the PRIVATE leagues (`league_type == "x"`) — the ones the
+        owner actually cares about. Excludes the global "Overall" /
+        per-gameweek pseudo-leagues (`league_type == "s"`) every manager
+        is auto-enrolled in, which are noise for this purpose."""
+        return [lg for lg in (*self.leagues_classic, *self.leagues_h2h) if lg.is_private]
 
 
 class PastSeason(BaseModel):
@@ -202,20 +255,39 @@ def get_bootstrap_static(force_refresh: bool = False) -> dict:
     return data
 
 
+def get_current_completed_gameweek() -> int | None:
+    """The most recently FINISHED gameweek, per `bootstrap-static`'s
+    `events` array (each event carries `id`, `finished`, `is_current`,
+    `is_next`). `finished=True` means every fixture in that gameweek has
+    been played and its points are final — this is deliberately the more
+    conservative "completed" reading (as opposed to `is_current`, which
+    can point at a gameweek whose matches are still being played), since
+    `fpl.entry`'s my-squad fetch is meant to record a settled squad, not
+    one mid-gameweek. Returns `None` before any gameweek has finished
+    (pre-season, or partway through GW1)."""
+    data = get_bootstrap_static()
+    finished_ids = [e["id"] for e in data.get("events", []) if e.get("finished")]
+    return max(finished_ids) if finished_ids else None
+
+
 def get_entry(entry_id: int) -> EntrySummary | None:
     """Fetch a manager's public profile. Returns None on 404 (bad ID)."""
     data = _get_json(f"{API_BASE}/entry/{entry_id}/", _cache_path("entry", entry_id))
     if data is None:
         return None
+    leagues = data.get("leagues") or {}
     return EntrySummary(
         entry_id=entry_id,
         team_name=data["name"],
         player_first_name=data["player_first_name"],
         player_last_name=data["player_last_name"],
         summary_overall_rank=data.get("summary_overall_rank"),
+        summary_overall_points=data.get("summary_overall_points"),
         started_event=data.get("started_event", 1),
         last_deadline_bank=data.get("last_deadline_bank"),
         last_deadline_value=data.get("last_deadline_value"),
+        leagues_classic=_parse_league_standings(leagues.get("classic", [])),
+        leagues_h2h=_parse_league_standings(leagues.get("h2h", [])),
     )
 
 

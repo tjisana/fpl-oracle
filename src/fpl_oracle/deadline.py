@@ -74,7 +74,7 @@ from fpl_oracle.fpl.players import PlayerDB
 from fpl_oracle.ingest.run_ingest import TARGET_TRANSCRIPT_COUNT, eligible_creators
 from fpl_oracle.ingest.run_ingest import main as ingest_main
 from fpl_oracle.logging_setup import configure_logging
-from fpl_oracle.pipeline import DEFAULT_RUNS_DIR, SquadDiff, run_pipeline
+from fpl_oracle.pipeline import DEFAULT_RUNS_DIR, SquadDiff, fetch_my_squad_summary, run_pipeline
 from fpl_oracle.roster.registry import REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -368,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
             runs_dir=DEFAULT_RUNS_DIR,
             force_refresh=True,
             nuance_fn=nuance_fn,
+            my_squad_fn=fetch_my_squad_summary,
         )
     except Exception as e:  # noqa: BLE001 - report + resume, never lose earlier work
         resume = RESUME_AFTER_EXTRACT + ("" if nuance else " --no-nuance")

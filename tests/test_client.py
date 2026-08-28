@@ -137,6 +137,171 @@ class TestEntryCacheNeverExpires:
         assert len(history.past) == 1
 
 
+class TestEntryLeaguesAndPoints:
+    """Job 1: `summary_overall_points` and the `leagues.classic[]` /
+    `leagues.h2h[]` standings, parsed onto `EntrySummary`, plus the
+    `private_leagues` convenience property (league_type == 'x' only —
+    the global 's' pseudo-leagues are noise)."""
+
+    def _entry_payload(self, **overrides: object) -> dict:
+        base: dict = {
+            "name": "Test Team",
+            "player_first_name": "Test",
+            "player_last_name": "Manager",
+            "summary_overall_rank": 12345,
+            "summary_overall_points": 180,
+            "leagues": {
+                "classic": [
+                    {
+                        "id": 1,
+                        "name": "Overall",
+                        "league_type": "s",
+                        "entry_rank": 500000,
+                        "entry_last_rank": 510000,
+                        "rank_count": None,
+                    },
+                    {
+                        "id": 2,
+                        "name": "Rainmakers",
+                        "league_type": "x",
+                        "entry_rank": 2,
+                        "entry_last_rank": 2,
+                        "rank_count": 2,
+                    },
+                ],
+                "h2h": [
+                    {
+                        "id": 3,
+                        "name": "H2H League",
+                        "league_type": "x",
+                        "entry_rank": None,
+                        "entry_last_rank": None,
+                        "rank_count": 10,
+                    },
+                ],
+            },
+        }
+        base.update(overrides)
+        return base
+
+    def test_parses_points_and_leagues(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        monkeypatch.setattr(
+            client.httpx, "get", lambda url, **kw: _FakeResponse(self._entry_payload())
+        )
+
+        entry = client.get_entry(42)
+
+        assert entry is not None
+        assert entry.summary_overall_points == 180
+        assert len(entry.leagues_classic) == 2
+        assert len(entry.leagues_h2h) == 1
+        assert entry.leagues_classic[1].name == "Rainmakers"
+        assert entry.leagues_classic[1].league_type == "x"
+        assert entry.leagues_classic[1].is_private is True
+
+    def test_private_leagues_excludes_system_leagues(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        monkeypatch.setattr(
+            client.httpx, "get", lambda url, **kw: _FakeResponse(self._entry_payload())
+        )
+
+        entry = client.get_entry(42)
+
+        assert entry is not None
+        names = {lg.name for lg in entry.private_leagues}
+        assert names == {"Rainmakers", "H2H League"}
+        assert "Overall" not in names
+
+    def test_null_entry_rank_before_a_gameweek_is_scored(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        monkeypatch.setattr(
+            client.httpx, "get", lambda url, **kw: _FakeResponse(self._entry_payload())
+        )
+
+        entry = client.get_entry(42)
+
+        assert entry is not None
+        h2h_league = entry.leagues_h2h[0]
+        assert h2h_league.entry_rank is None
+        assert h2h_league.entry_last_rank is None
+        assert h2h_league.rank_count == 10
+
+    def test_missing_summary_overall_points_is_none_not_zero(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        payload = self._entry_payload()
+        del payload["summary_overall_points"]
+        monkeypatch.setattr(client.httpx, "get", lambda url, **kw: _FakeResponse(payload))
+
+        entry = client.get_entry(42)
+
+        assert entry is not None
+        assert entry.summary_overall_points is None
+
+    def test_empty_leagues_block_parses_cleanly(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        payload = self._entry_payload(leagues={})
+        monkeypatch.setattr(client.httpx, "get", lambda url, **kw: _FakeResponse(payload))
+
+        entry = client.get_entry(42)
+
+        assert entry is not None
+        assert entry.leagues_classic == []
+        assert entry.leagues_h2h == []
+        assert entry.private_leagues == []
+
+    def test_missing_leagues_key_entirely_parses_cleanly(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        payload = self._entry_payload()
+        del payload["leagues"]
+        monkeypatch.setattr(client.httpx, "get", lambda url, **kw: _FakeResponse(payload))
+
+        entry = client.get_entry(42)
+
+        assert entry is not None
+        assert entry.leagues_classic == []
+        assert entry.private_leagues == []
+
+
+class TestCurrentCompletedGameweek:
+    def test_returns_the_highest_finished_event_id(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        payload = {
+            "teams": [],
+            "elements": [],
+            "events": [
+                {"id": 1, "finished": True, "is_current": False, "is_next": False},
+                {"id": 2, "finished": True, "is_current": True, "is_next": False},
+                {"id": 3, "finished": False, "is_current": False, "is_next": True},
+            ],
+        }
+        monkeypatch.setattr(client.httpx, "get", lambda url, **kw: _FakeResponse(payload))
+
+        assert client.get_current_completed_gameweek() == 2
+
+    def test_no_finished_gameweeks_returns_none(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        payload = {
+            "teams": [],
+            "elements": [],
+            "events": [
+                {"id": 1, "finished": False, "is_current": True, "is_next": False},
+            ],
+        }
+        monkeypatch.setattr(client.httpx, "get", lambda url, **kw: _FakeResponse(payload))
+
+        assert client.get_current_completed_gameweek() is None
+
+    def test_missing_events_key_returns_none(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(client, "CACHE_DIR", tmp_path)
+        payload = {"teams": [], "elements": []}
+        monkeypatch.setattr(client.httpx, "get", lambda url, **kw: _FakeResponse(payload))
+
+        assert client.get_current_completed_gameweek() is None
+
+
 @pytest.mark.network
 class TestBootstrapStaticLive:
     def test_live_fetch_parses(self) -> None:

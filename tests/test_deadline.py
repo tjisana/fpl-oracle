@@ -433,6 +433,27 @@ class TestNuanceWiring:
         assert captured["nuance_fn"] is None
 
 
+# ---------------------------------------------------------------------------
+# My-squad wiring: unlike nuance, always on (no flag) — see pipeline.py's
+# `run_pipeline` docstring for why `run_pipeline()` itself defaults this to
+# off (test isolation) while `deadline.py` and `pipeline.main()` both wire
+# in the real fetch unconditionally.
+# ---------------------------------------------------------------------------
+
+
+class TestMySquadWiring:
+    def test_stage_three_wires_the_real_fetch_by_default(self, monkeypatch, tmp_path: Path) -> None:
+        captured: dict = {}
+        _patch_happy_path(monkeypatch, tmp_path, captured)
+
+        rc = deadline.main([])
+
+        assert rc == 0
+        from fpl_oracle.pipeline import fetch_my_squad_summary
+
+        assert captured["my_squad_fn"] is fetch_my_squad_summary
+
+
 class TestForceRefreshWiring:
     def test_solve_stage_always_forces_refresh(self, monkeypatch, tmp_path: Path) -> None:
         captured: dict = {}

@@ -54,8 +54,15 @@ from fpl_oracle.consensus.captaincy import CaptaincyElection, elect, required_op
 from fpl_oracle.consensus.scoring import PlayerScore, score_picks
 from fpl_oracle.extract.run_extract import ResolvedExtraction
 from fpl_oracle.extract.schemas import PickAction
+from fpl_oracle.fpl import client as fpl_client
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict, filter_squad_candidates
-from fpl_oracle.fpl.client import CACHE_DIR
+from fpl_oracle.fpl.client import CACHE_DIR, LeagueStanding
+from fpl_oracle.fpl.entry import (
+    EntryIdNotConfiguredError,
+    OwnedPlayer,
+    fetch_my_squad,
+    get_entry_id,
+)
 from fpl_oracle.fpl.players import PlayerDB, Position
 from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.report.models import NuanceRecord, SquadNuance
@@ -92,6 +99,19 @@ NuanceFn = Callable[
 # election, db, extractions, creators, availability, nuance, diff) — see
 # `_render_report`.
 ReportFn = Callable[..., str]
+
+# Seam signature for the my-squad fetch (Job 2, ROADMAP.md "My-squad
+# awareness"): a network-touching call, so — same spirit as
+# `report_fn`/`nuance_fn` above — it's injectable so tests never need it
+# to actually reach fantasy.premierleague.com. Unlike `nuance_fn` (opt-in,
+# `None` means "skip"), the REAL fetch (`fetch_my_squad_summary`) is meant
+# to run on every real pipeline invocation — see `main()`, which is the
+# one place that wires the real function in by default. A bare
+# `run_pipeline()` call (every existing test, and any other direct
+# caller) leaves `my_squad_fn=None` and gets no my-squad section, exactly
+# like an injected `player_db`/`registry` bypasses the real network loads
+# those parameters would otherwise trigger.
+MySquadFn = Callable[[PlayerDB], "tuple[MySquadSummary | None, str]"]
 
 DEFAULT_EXTRACTIONS_DIR = Path("data/extractions")
 DEFAULT_RUNS_DIR = Path("data/runs")
@@ -146,6 +166,36 @@ class SolverOutcome(BaseModel):
     relaxed_captaincy: bool
 
 
+class MySquadSummary(BaseModel):
+    """What the owner actually owns, as of the current completed
+    gameweek, plus how they're doing — attached to `RunRecord` for the
+    transfer recommender (a separate, not-yet-built task) to consume.
+
+    OBSERVATIONAL ONLY. Nothing here feeds the solver, consensus scoring,
+    or captaincy election above — those already ran by the time this is
+    fetched, and this pipeline's job is still "pick 15 from the
+    consensus", unchanged. See `run_pipeline`'s `my_squad_fn` seam.
+    """
+
+    entry_id: int
+    team_name: str
+    gameweek: int = Field(description="the current completed gameweek this squad was fetched for")
+    players: list[OwnedPlayer] = Field(
+        description="all 15 owned players, with position/bench flags"
+    )
+    bank: int = Field(description="tenths of a million, matching now_cost's convention")
+    team_value: int = Field(description="total squad value, tenths of a million")
+    free_transfers: int | None = Field(
+        description="derived free transfers available for gameweek + 1; None if undeterminable"
+    )
+    free_transfers_note: str = Field(description="how free_transfers was derived, or why it's None")
+    overall_rank: int | None
+    overall_points: int | None
+    private_leagues: list[LeagueStanding] = Field(
+        description="leagues.classic[]/leagues.h2h[] entries with league_type == 'x' only"
+    )
+
+
 class RunRecord(BaseModel):
     """The immutable audit record for one pipeline run."""
 
@@ -176,6 +226,21 @@ class RunRecord(BaseModel):
     excluded_players: list[ExcludedPlayer]
     counts: RunCounts
     solver: SolverOutcome
+    my_squad: MySquadSummary | None = Field(
+        default=None,
+        description=(
+            "the owner's actual squad for the current completed gameweek, plus overall "
+            "rank/points and private-league standings (Job 2, ROADMAP.md 'My-squad "
+            "awareness') — OBSERVATIONAL ONLY, never fed into the solver/consensus above. "
+            "None when FPL_ENTRY_ID isn't configured, no gameweek has completed yet, the "
+            "picks aren't public yet, or the fetch failed — see my_squad_note for which. "
+            "Defaults to None so run.json files written before this field existed still parse."
+        ),
+    )
+    my_squad_note: str = Field(
+        default="",
+        description="why my_squad is None, or a short confirmation of what was fetched",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +614,62 @@ def _formation(squad: Squad) -> str:
 
 
 # ---------------------------------------------------------------------------
+# My-squad fetch (Job 2, ROADMAP.md "My-squad awareness") — observational
+# only; see MySquadSummary's docstring. This is the one place in this
+# module that reaches `fpl.entry`/`fpl.client`'s entry-endpoint fetches;
+# everything above it (extractions, consensus, solver) is untouched by it.
+# ---------------------------------------------------------------------------
+
+
+def fetch_my_squad_summary(player_db: PlayerDB) -> tuple[MySquadSummary | None, str]:
+    """Best-effort, network-touching fetch of the owner's my-squad
+    summary for `run_pipeline`'s `my_squad_fn` seam. NEVER raises — Job
+    2's degrade-gracefully requirement: a missing `FPL_ENTRY_ID`, an
+    entry with no completed gameweek yet, or any fetch failure all return
+    `(None, <reason>)` rather than costing the run its squad/report.
+    """
+    try:
+        entry_id = get_entry_id()
+    except EntryIdNotConfiguredError:
+        return None, "FPL_ENTRY_ID not configured — my-squad section skipped"
+
+    try:
+        gameweek = fpl_client.get_current_completed_gameweek()
+        if gameweek is None:
+            return None, "no gameweek has completed yet — my-squad section skipped"
+
+        squad = fetch_my_squad(entry_id, gameweek, player_db)
+        if squad is None:
+            return (
+                None,
+                f"picks for GW{gameweek} aren't public yet — my-squad section skipped",
+            )
+
+        entry_summary = fpl_client.get_entry(entry_id)
+        overall_rank = entry_summary.summary_overall_rank if entry_summary else None
+        overall_points = entry_summary.summary_overall_points if entry_summary else None
+        private_leagues = entry_summary.private_leagues if entry_summary else []
+
+        summary = MySquadSummary(
+            entry_id=entry_id,
+            team_name=squad.team_name,
+            gameweek=gameweek,
+            players=squad.players,
+            bank=squad.bank,
+            team_value=squad.team_value,
+            free_transfers=squad.free_transfers,
+            free_transfers_note=squad.free_transfers_note,
+            overall_rank=overall_rank,
+            overall_points=overall_points,
+            private_leagues=private_leagues,
+        )
+        return summary, f"fetched squad for GW{gameweek}"
+    except Exception as e:  # noqa: BLE001 - my-squad must never cost the run its squad
+        logger.warning("pipeline: my-squad fetch failed: %s", e)
+        return None, f"my-squad fetch failed: {e}"
+
+
+# ---------------------------------------------------------------------------
 # Orchestration.
 # ---------------------------------------------------------------------------
 
@@ -641,6 +762,7 @@ def run_pipeline(
     force_refresh: bool = False,
     nuance_fn: NuanceFn | None = None,
     report_fn: ReportFn | None = None,
+    my_squad_fn: MySquadFn | None = None,
 ) -> PipelineResult:
     """Run the full stored-extractions -> solved-squad -> report pipeline
     and write an immutable run record. `player_db`/`registry` are
@@ -663,6 +785,20 @@ def run_pipeline(
     real one (`report.gameweek.render_report`), lazily imported. A test
     fake only needs to match `ReportFn`'s signature — the write-to-disk
     step lives in this module, not in the fake.
+
+    `my_squad_fn` is OPT-IN at this level, same shape as `nuance_fn`:
+    `None` (the default) means no my-squad fetch happens and
+    `RunRecord.my_squad` stays `None` — this is what every existing
+    caller (this module's own test suite, and any other direct
+    `run_pipeline()` call) gets without changes. `main()` is the one
+    place that wires in the real fetch (`fetch_my_squad_summary`) by
+    default, so a real CLI run always attempts it without needing a
+    flag — see Job 2 in ROADMAP.md ("My-squad awareness"). Pass a
+    callable matching `MySquadFn` to enable it elsewhere (e.g.
+    `deadline.py`'s stage 3). The real fetch never raises on its own
+    (see `fetch_my_squad_summary`), but this function is still per-item
+    non-fatal: a `my_squad_fn` that raises degrades to `(None, note)`
+    rather than losing the solved squad.
     """
     started_at = datetime.now(UTC)
     git = get_git_info()
@@ -707,6 +843,21 @@ def run_pipeline(
     captain, vice = _pick_captain_vice(election, squad)
     diff = diff_vs_previous(previous_run, {p.player_id for p in squad.players}, captain)
 
+    # Job 2, ROADMAP.md "My-squad awareness" — purely observational, and
+    # computed independently of everything above: it can never change the
+    # squad/captain/diff already decided. `my_squad_fn=None` (every
+    # existing caller) skips it entirely; see run_pipeline's docstring.
+    # Belt-and-braces non-fatal even though `fetch_my_squad_summary`
+    # itself never raises — a test-injected `my_squad_fn` might.
+    my_squad_summary: MySquadSummary | None = None
+    my_squad_note = "my-squad fetch not requested for this run"
+    if my_squad_fn is not None:
+        try:
+            my_squad_summary, my_squad_note = my_squad_fn(db)
+        except Exception as e:  # noqa: BLE001 - my-squad must never cost the run its squad
+            logger.warning("pipeline: my_squad_fn raised: %s", e)
+            my_squad_summary, my_squad_note = None, f"my-squad fetch failed: {e}"
+
     finished_at = datetime.now(UTC)
     run_id, run_dir = _reserve_run_dir(runs_dir, _base_run_id(started_at, git))
 
@@ -737,6 +888,8 @@ def run_pipeline(
             captain_options_required=squad.captain_options_required,
             relaxed_captaincy=squad.relaxed_captaincy,
         ),
+        my_squad=my_squad_summary,
+        my_squad_note=my_squad_note,
     )
 
     (run_dir / "run.json").write_text(record.model_dump_json(indent=2))
@@ -826,7 +979,14 @@ def main(argv: list[str] | None = None) -> int:
 
         nuance_fn = generate_nuance
 
-    result = run_pipeline(force_refresh=args.force_refresh, nuance_fn=nuance_fn)
+    # Unlike nuance, my-squad has no flag: it's free (no LLM call), so a
+    # real CLI run always attempts it — see run_pipeline's docstring for
+    # why `run_pipeline()` itself defaults this to off (test isolation).
+    result = run_pipeline(
+        force_refresh=args.force_refresh,
+        nuance_fn=nuance_fn,
+        my_squad_fn=fetch_my_squad_summary,
+    )
     record, squad, run_dir = result.record, result.squad, result.run_dir
 
     # Deliberately NOT force_refresh: this only resolves ids to names for
@@ -861,6 +1021,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"run record written to {run_dir}")
     if result.report_path is not None:
         print(f"report written to {result.report_path}")
+
+    if record.my_squad is not None:
+        ms = record.my_squad
+        print(
+            f"my squad (GW{ms.gameweek}): {ms.team_name} — "
+            f"bank £{ms.bank / 10:.1f}m, value £{ms.team_value / 10:.1f}m, "
+            f"free transfers: {ms.free_transfers if ms.free_transfers is not None else 'unknown'}"
+        )
+        if ms.overall_rank is not None:
+            print(f"  overall rank: {ms.overall_rank:,}  overall points: {ms.overall_points}")
+        for lg in ms.private_leagues:
+            rank = lg.entry_rank if lg.entry_rank is not None else "?"
+            count = lg.rank_count if lg.rank_count is not None else "?"
+            print(f"  {lg.name}: {rank}/{count}")
+    else:
+        print(f"my squad: not recorded — {record.my_squad_note}")
     return 0
 
 
