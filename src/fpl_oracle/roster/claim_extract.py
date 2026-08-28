@@ -39,6 +39,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript
+from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.roster.claim_verify import collapse_whitespace
 from fpl_oracle.roster.claims import (
     RankClaimCandidate,
@@ -420,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging()
     if args.reverify:
         try:
             path = reverify_saved_candidates()

@@ -29,9 +29,9 @@ STAGES, IN ORDER, AND WHAT THEY COST:
    the run. Letting it gate the chain would mean the least important
    stage could cost you a deadline-morning squad.
 2. re-extract picks (`extract.run_extract`) — COSTS MONEY. One Claude
-   extraction call per eligible creator with a findable GW1 video, and
+   extraction call per eligible creator with a findable gameweek video, and
    the stage that genuinely refreshes video selection for all of them
-   (including creators who had no GW1 video at the last run). Run from
+   (including creators who had no video at the last run). Run from
    here with `force_refresh=True`, which bypasses the 6-hour YouTube
    uploads-listing cache — without it a run at 08:00 would reuse a 06:00
    listing and could not see a video posted at 07:30, which is exactly
@@ -69,10 +69,11 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from fpl_oracle.extract.run_extract import run_extraction
+from fpl_oracle.extract.run_extract import resolve_target_gameweek, run_extraction
 from fpl_oracle.fpl.players import PlayerDB
 from fpl_oracle.ingest.run_ingest import TARGET_TRANSCRIPT_COUNT, eligible_creators
 from fpl_oracle.ingest.run_ingest import main as ingest_main
+from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.pipeline import DEFAULT_RUNS_DIR, SquadDiff, run_pipeline
 from fpl_oracle.roster.registry import REGISTRY
 
@@ -255,22 +256,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-nuance", action="store_true", help="skip the nuance LLM pass in stage 3"
     )
+    parser.add_argument(
+        "--gameweek",
+        type=int,
+        default=None,
+        help="target gameweek for re-extraction (default: the FPL API's next event)",
+    )
     args = parser.parse_args(argv)
 
     # Without this the root logger sits at WARNING with no handlers, so every
     # logger.info() in the stages below is DROPPED — including run_extract's
-    # per-creator "N picks (M matched)" line and its "no GW1 team video found".
+    # per-creator "N picks (M matched)" line and its "no gameweek video found".
     # The owner would watch several silent minutes of paid extraction with no
     # way to tell eighteen successes from zero.
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    # httpx logs every request URL at INFO — and the YouTube Data API takes
-    # its key as a URL QUERY PARAMETER, so INFO-level httpx logging prints
-    # the key in clear text to the terminal and into any captured log. That
-    # is a straight violation of "secrets never printed" (CLAUDE.md), and it
-    # was introduced by the basicConfig line above, whose only purpose is to
-    # unmask OUR stage progress. Silence the transport; keep our own logs.
-    for noisy in ("httpx", "httpcore", "anthropic"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    configure_logging()
 
     nuance = not args.no_nuance
 
@@ -306,10 +305,18 @@ def main(argv: list[str] | None = None) -> int:
         print("2/3 re-extract picks: SKIPPED (--skip-extract)")
     else:
         try:
-            summary = _run_stage("2/3 re-extract picks", run_extraction, force_refresh=True)
+            gameweek, published_after = resolve_target_gameweek(args.gameweek, force_refresh=True)
+            summary = _run_stage(
+                "2/3 re-extract picks",
+                run_extraction,
+                gameweek,
+                published_after,
+                force_refresh=True,
+            )
             print(
                 f"   extracted {summary.succeeded}/{summary.attempted} creators "
-                f"({summary.failed} produced nothing) — {summary.report_path}"
+                f"({summary.failed} produced nothing, {summary.skip_count} skipped/reused) — "
+                f"{summary.report_path}"
             )
             # Per-creator failures are non-fatal inside run_extraction, so a run
             # where EVERY creator failed returns as quietly as a perfect one. Left

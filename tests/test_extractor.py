@@ -119,7 +119,7 @@ def test_request_shape_is_pinned(monkeypatch):
 
     call = calls[0]
     assert call["model"] == "claude-opus-5"
-    assert call["max_tokens"] == 16_000
+    assert call["max_tokens"] == 32_000
     (system_block,) = call["system"]
     assert system_block["cache_control"] == {"type": "ephemeral"}
     assert "player_name_raw" in system_block["text"] or len(system_block["text"]) > 500
