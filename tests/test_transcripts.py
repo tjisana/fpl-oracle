@@ -9,16 +9,32 @@ import time
 from pathlib import Path
 
 import pytest
+from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
-from fpl_oracle.ingest import youtube_client
+from fpl_oracle.ingest import transcripts, youtube_client
 from fpl_oracle.ingest.transcripts import (
     Transcript,
     TranscriptSegment,
+    _proxy_config_from_env,
     fetch_transcript,
     load_transcript,
     save_transcript,
 )
 from fpl_oracle.ingest.youtube_client import VideoInfo, _parse_playlist_items
+
+_PROXY_ENV_VARS = (
+    "YT_PROXY_WEBSHARE_USERNAME",
+    "YT_PROXY_WEBSHARE_PASSWORD",
+    "YT_PROXY_WEBSHARE_LOCATIONS",
+    "YT_PROXY_HTTP_URL",
+    "YT_PROXY_HTTPS_URL",
+)
+
+
+def _clear_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _PROXY_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 # A video actually ingested by run_ingest (Let's Talk FPL, GW1 forwards
 # video) — known to have an auto-generated English transcript as of this
@@ -107,6 +123,131 @@ class TestSaveLoadRoundTrip:
 
         result = fetch_transcript("cached123", dir=tmp_path)
         assert result == t
+
+
+class TestProxyConfigFromEnv:
+    """`_proxy_config_from_env` must be genuinely inert when no proxy env
+    vars are set (today's behaviour, unchanged) and must thread the right
+    `ProxyConfig` through when they are — never against a real proxy, just
+    the config object construction."""
+
+    def test_no_env_vars_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+
+        assert _proxy_config_from_env() is None
+
+    def test_webshare_credentials_build_webshare_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_USERNAME", "user123")
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_PASSWORD", "pass456")
+
+        config = _proxy_config_from_env()
+
+        assert isinstance(config, WebshareProxyConfig)
+        proxy_url = config.to_requests_dict()["http"]
+        assert proxy_url.startswith("http://user123")
+        assert ":pass456@" in proxy_url
+
+    def test_webshare_locations_are_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_USERNAME", "user123")
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_PASSWORD", "pass456")
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_LOCATIONS", "GB, DE ,FR")
+
+        config = _proxy_config_from_env()
+
+        assert isinstance(config, WebshareProxyConfig)
+        # filter_ip_locations is stored privately; assert on the resulting
+        # proxy URL, which is where the parsed locations actually surface.
+        proxy_url = config.to_requests_dict()["http"]
+        assert "-GB-DE-FR-rotate" in proxy_url
+
+    def test_generic_proxy_urls_build_generic_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+        monkeypatch.setenv("YT_PROXY_HTTP_URL", "http://proxy.example:8080")
+        monkeypatch.setenv("YT_PROXY_HTTPS_URL", "https://proxy.example:8443")
+
+        config = _proxy_config_from_env()
+
+        assert isinstance(config, GenericProxyConfig)
+        assert config.to_requests_dict() == {
+            "http": "http://proxy.example:8080",
+            "https": "https://proxy.example:8443",
+        }
+
+    def test_webshare_takes_priority_over_generic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_USERNAME", "user123")
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_PASSWORD", "pass456")
+        monkeypatch.setenv("YT_PROXY_HTTP_URL", "http://proxy.example:8080")
+
+        config = _proxy_config_from_env()
+
+        assert isinstance(config, WebshareProxyConfig)
+
+    def test_incomplete_webshare_credentials_fall_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Username with no password isn't enough to build a WebshareProxyConfig
+        # (it would raise) — should fall through to "no proxy" rather than error.
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+        monkeypatch.setenv("YT_PROXY_WEBSHARE_USERNAME", "user123")
+
+        assert _proxy_config_from_env() is None
+
+
+class TestSelectTranscriptThreadsProxyConfig:
+    """`_select_transcript` must pass whatever `_proxy_config_from_env`
+    returns straight into `YouTubeTranscriptApi(proxy_config=...)` — checked
+    by capturing the constructor argument, never against a real network call
+    or a real proxy."""
+
+    class _StopHere(Exception):
+        """Marker raised by the fake API client right after capturing the
+        constructor args, so the test doesn't need to fake the rest of the
+        list/find/fetch chain."""
+
+    def _fake_api_class(self, captured: list) -> type:
+        stop_here = self._StopHere
+
+        class _FakeYouTubeTranscriptApi:
+            def __init__(self, proxy_config=None, http_client=None) -> None:
+                captured.append(proxy_config)
+
+            def list(self, video_id: str):
+                raise stop_here
+
+        return _FakeYouTubeTranscriptApi
+
+    def test_no_proxy_configured_passes_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setattr(transcripts, "load_dotenv", lambda: None)
+        captured: list = []
+        monkeypatch.setattr(transcripts, "YouTubeTranscriptApi", self._fake_api_class(captured))
+
+        with pytest.raises(self._StopHere):
+            transcripts._select_transcript("vid123")
+
+        assert captured == [None]
+
+    def test_proxy_configured_is_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sentinel = GenericProxyConfig(http_url="http://proxy.example:8080")
+        monkeypatch.setattr(transcripts, "_proxy_config_from_env", lambda: sentinel)
+        captured: list = []
+        monkeypatch.setattr(transcripts, "YouTubeTranscriptApi", self._fake_api_class(captured))
+
+        with pytest.raises(self._StopHere):
+            transcripts._select_transcript("vid123")
+
+        assert captured == [sentinel]
 
 
 class TestParsePlaylistItems:

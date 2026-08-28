@@ -5,6 +5,11 @@ All transcript network calls go through `fetch_transcript` (never ad hoc
 under `data/transcripts/{video_id}.json`, which doubles as a cache —
 transcripts of already-published videos don't change, so `fetch_transcript`
 checks the on-disk copy before hitting the network.
+
+Proxy support (optional, off by default) is configured entirely through
+environment variables — see `_proxy_config_from_env` and
+`docs/transcript-blocking.md`. Unset, behaviour is unchanged: no proxy,
+requests go out on this machine's own IP.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 from youtube_transcript_api import (
     CouldNotRetrieveTranscript,
@@ -21,6 +27,7 @@ from youtube_transcript_api import (
     YouTubeRequestFailed,
     YouTubeTranscriptApi,
 )
+from youtube_transcript_api.proxies import GenericProxyConfig, ProxyConfig, WebshareProxyConfig
 
 DEFAULT_TRANSCRIPT_DIR = Path("data/transcripts")
 
@@ -42,6 +49,49 @@ class Transcript(BaseModel):
         return " ".join(segment.text for segment in self.segments)
 
 
+def _proxy_config_from_env() -> ProxyConfig | None:
+    """Build a `youtube_transcript_api` proxy config from environment
+    variables, or return None if none are set — the default, and today's
+    behaviour: no proxy, all requests go out on this machine's own IP.
+
+    Two backends, checked in this order (first one with enough config wins):
+
+      - Webshare residential proxy — the backend `youtube_transcript_api`
+        itself recommends for working around IP blocks:
+        `YT_PROXY_WEBSHARE_USERNAME` / `YT_PROXY_WEBSHARE_PASSWORD`
+        (+ optional `YT_PROXY_WEBSHARE_LOCATIONS`, a comma-separated list
+        of location codes to restrict the IP pool to).
+      - Any generic HTTP/HTTPS/SOCKS proxy: `YT_PROXY_HTTP_URL` and/or
+        `YT_PROXY_HTTPS_URL` (at least one required).
+
+    Credentials are read from the environment (loaded from `.env` via
+    python-dotenv, per project convention) and are never logged — only the
+    resulting `ProxyConfig` object is returned, never the raw values."""
+    load_dotenv()
+
+    webshare_username = os.environ.get("YT_PROXY_WEBSHARE_USERNAME")
+    webshare_password = os.environ.get("YT_PROXY_WEBSHARE_PASSWORD")
+    if webshare_username and webshare_password:
+        locations_raw = os.environ.get("YT_PROXY_WEBSHARE_LOCATIONS")
+        locations = (
+            [loc.strip() for loc in locations_raw.split(",") if loc.strip()]
+            if locations_raw
+            else None
+        )
+        return WebshareProxyConfig(
+            proxy_username=webshare_username,
+            proxy_password=webshare_password,
+            filter_ip_locations=locations,
+        )
+
+    http_url = os.environ.get("YT_PROXY_HTTP_URL")
+    https_url = os.environ.get("YT_PROXY_HTTPS_URL")
+    if http_url or https_url:
+        return GenericProxyConfig(http_url=http_url, https_url=https_url)
+
+    return None
+
+
 def _select_transcript(video_id: str) -> Transcript | None:
     """Pick a transcript for `video_id`: prefer a manually-created English
     transcript, fall back to an auto-generated one. Returns None (after
@@ -51,7 +101,7 @@ def _select_transcript(video_id: str) -> Transcript | None:
     age-restricted, unplayable, IP blocked, ...) propagates to the caller —
     `fetch_transcript` is what decides which of those are a per-video skip
     versus an environmental failure that should raise."""
-    transcript_list = YouTubeTranscriptApi().list(video_id)
+    transcript_list = YouTubeTranscriptApi(proxy_config=_proxy_config_from_env()).list(video_id)
 
     try:
         found = transcript_list.find_manually_created_transcript(["en"])
