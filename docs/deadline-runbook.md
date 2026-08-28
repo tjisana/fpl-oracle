@@ -1,5 +1,79 @@
 # Deadline-morning runbook
 
+## GW2 — Fri 2026-08-28, 17:30 UTC / 13:30 EDT
+
+Do these in order. Steps 1-2 are free; step 3 is the only one that spends.
+
+### 1. Retry the three blocked transcripts (free)
+
+The unthrottled harvest on 2026-08-27 pulled 34 transcripts in 59 seconds
+and was IP-blocked. `fpl-blackbox`, `fpltips` and `fpl-dylan` were lost to
+it. A poller may already have recovered them overnight — check first:
+
+```
+tail -5 /tmp/fpl-retry.log
+uv run python -m fpl_oracle.ingest.warm_cache --since 2026-08-22 --dry-run
+```
+
+If they are still missing and the block has lifted, warm them slowly:
+
+```
+uv run python -m fpl_oracle.ingest.warm_cache --since 2026-08-22 --delay 4 \
+  --creator-ids fpl-blackbox fpltips fpl-dylan
+```
+
+If still blocked, proceed without them — 10 creators is a legitimate basis.
+Do NOT lower `--delay` to go faster; that is what caused the block.
+
+### 2. Check what extraction will select (free, no Claude calls)
+
+```
+uv run python -m fpl_oracle.extract.run_extract --gameweek 2 --dry-run
+```
+
+13/18 creators resolved when last checked. Read the list before spending.
+
+### 3. Extract, then solve
+
+PASS `--gameweek 2` EXPLICITLY, on both commands. The FPL API's `is_next`
+flips to GW3 the moment the 17:30 UTC deadline passes, so a run started
+late would silently target GW3 and find nothing.
+
+```
+uv run python -m fpl_oracle.extract.run_extract --gameweek 2
+uv run python -m fpl_oracle.pipeline --gameweek 2 --force-refresh
+```
+
+Extraction is the paid stage: one Claude call per creator, ~13 creators.
+Re-running is safe — the skip-if-recent guard reuses extractions already
+on disk and only pays for what is missing. Use `--force` only to
+deliberately re-extract.
+
+### 4. Read this, in this order
+
+1. **`## This week's transfer`** — the first section of `report.md`, and
+   the only part actionable with one free transfer. Everything below it
+   describes the solver's £100m squad, which is the wildcard answer.
+2. **A `FORCED_MOVE` verdict** means an owned player is unavailable. As of
+   2026-08-27, Chiesa is injured (`status='i'`, 0% chance).
+3. **The pricing line.** If it says UNVERIFIED, the derived selling prices
+   did not reconcile against FPL's own squad value — confirm affordability
+   in the FPL app before making the transfer.
+4. **`data/extractions/match_quality.md`** — did every creator's picks
+   resolve? A creator with 0 matched picks contributed nothing.
+
+### If the pipeline refuses to solve
+
+`REFUSING TO SOLVE: no usable creator picks for GW2` is a correct,
+deliberate refusal, not a crash. With zero picks the objective degenerates
+to "spend £100m" and returns a confident-looking squad backed by nothing.
+It means extraction produced no GW2 data — fix that rather than working
+around it.
+
+---
+
+## General notes (any gameweek)
+
 For the owner, at 8am, under time pressure. Command-first.
 
 ## 1. Check the plan first — always
