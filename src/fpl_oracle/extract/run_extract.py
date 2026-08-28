@@ -702,6 +702,15 @@ def main(argv: list[str] | None = None) -> int:
         help="select videos and print them per creator; no transcript fetch, no Claude call",
     )
     parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help=(
+            "bypass the 6h YouTube uploads-listing cache. REQUIRED on deadline morning: "
+            "without it a run at 11:40 can reuse a 05:40 listing and never see the "
+            "'final thoughts' video posted at 09:00 — silently extracting yesterday's team."
+        ),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="re-extract even if data/extractions/{video_id}.json already exists",
@@ -712,12 +721,21 @@ def main(argv: list[str] | None = None) -> int:
     gameweek, published_after = resolve_target_gameweek(args.gameweek)
 
     if args.dry_run:
-        selections = select_videos(gameweek, published_after, creator_ids=args.creator_ids or None)
+        selections = select_videos(
+            gameweek,
+            published_after,
+            creator_ids=args.creator_ids or None,
+            force_refresh=args.force_refresh,
+        )
         _print_dry_run(selections, gameweek)
         return 0
 
     summary = run_extraction(
-        gameweek, published_after, creator_ids=args.creator_ids or None, force=args.force
+        gameweek,
+        published_after,
+        creator_ids=args.creator_ids or None,
+        force=args.force,
+        force_refresh=args.force_refresh,
     )
     print(
         f"extracted {summary.succeeded}/{summary.attempted} creators "
