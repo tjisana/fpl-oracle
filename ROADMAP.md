@@ -112,6 +112,11 @@ is it worth -4?" Different objective, much smaller search space.
       has transfer history this season yet. Spot-check after a few gameweeks.
 - [ ] **Tier-2 phonetic matching is loose** — a first name that sounds like a
       teammate's surname can still slip through the fuzzy tiers.
+- [x] ~~**FPL Matthew unattributed**~~ — DECIDED 2026-08-28, deliberately left out.
+      His channel-mates name themselves in titles so they attribute cleanly; his
+      videos don't, and the shared FFH channel hosts non-registry people, so
+      attributing unclaimed videos to him would risk a stranger's picks carrying
+      his weight. One lost creator is the cheaper error. See `roster/registry.py`.
 - [ ] 4 eligible creators contributed nothing to the GW1 run (FPL Heisenberg,
       FPL Matthew, Planet FPL, Pras). Pras matters most — he's The FPL Wire's
       channel primary, so his absence silently costs Zophar and Lateriser too.

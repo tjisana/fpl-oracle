@@ -751,7 +751,15 @@ REGISTRY: list[Creator] = [
         + " (A plain search hint for 'FPL Matthew' also false-positive-matches 'FPL Mate' — "
         "a completely unrelated, much bigger channel; don't reuse that match.) "
         "`title_filter='FPL Matthew'` is scoped to FFH-channel video titles only, so it's "
-        "safe here despite the FPL Mate collision risk in a plain search/description context.",
+        "safe here despite the FPL Mate collision risk in a plain search/description context. "
+        "OWNER DECISION 2026-08-28: he contributes NOTHING and that is accepted. Unlike his "
+        "channel-mates, who name themselves in titles ('FPL Salah's Gameweek 2 Team Reveal', "
+        "'BigManBakar's Gameweek 2 Team Reveal'), Matthew's videos are titled generically "
+        "('MY FPL GW2 TEAM SELECTION!'), so the title_filter never matches. The FFH channel "
+        "also hosts people outside this registry (a Green Arrow Podcast, guest reveals), so "
+        "attributing unclaimed videos to him would risk filing a stranger's picks under his "
+        "weight and double-counting them in consensus. Losing one creator is the cheaper "
+        "error. Revisit only with positive evidence that a specific video is his.",
     ),
     Creator(
         creator_id="big-man-bakar",
