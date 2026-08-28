@@ -93,8 +93,9 @@ is it worth -4?" Different objective, much smaller search space.
       after any resolver change — it is the safety net.
 - [ ] **Uneven resolution across creators** distorts weighting: FPL Salah loses 41%
       of picks to name resolution, Gianni Buttice 0%.
-- [ ] **Re-extraction re-pays for creators already done** — no skip-if-recent check,
-      so a stage-2 retry re-bills every creator.
+- [x] ~~**Re-extraction re-pays for creators already done**~~ — FIXED. `run_extract`
+      now reuses an existing `data/extractions/{video_id}.json` for the selected
+      video and counts the reuse separately; `--force` overrides.
 - [x] ~~First-name references resolved to the wrong player~~ — FIXED. `b12e4a1`
       added an explicit first-name path; `1abf491` then fixed a wrong-match
       regression it introduced (accent-stripping made "Jérémy" and "Jeremy"
