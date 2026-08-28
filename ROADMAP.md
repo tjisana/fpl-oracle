@@ -10,12 +10,29 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW1 deadline (Fri 2026-08-21, 17:30 UTC)
+## NOW — GW2 deadline (Fri 2026-08-28, 17:30 UTC / 13:30 EDT)
 
-- [ ] Run the deadline command late Friday afternoon (~16:00 UTC) to catch the
-      "final GW1 thoughts" videos. `uv run python -m fpl_oracle.deadline --dry-run`
-      first. See `docs/deadline-runbook.md`.
-- [ ] A team is already entered from an earlier run — Friday's run is to REVISE it.
+GW1 result: 34 pts vs a 50 average, OR 8,092,210, 8 left on the bench.
+Bottom or near-bottom of every private league. 1 free transfer, £0.0 bank.
+
+- [x] **Gameweek-agnostic harvest** — selection was hardcoded to GW1, so the
+      system silently expired the moment the season moved on. `run_extract`
+      now takes `--gameweek N` (defaults to the FPL API's next event), gates
+      generic in-season titles on a publish-date window, and skips-if-recent
+      so a retry can't re-bill every creator.
+- [x] **Transcript warmer** (`ingest/warm_cache.py`) — decouples the free,
+      slow, blockable YouTube stage from the paid extraction stage.
+- [x] **My-squad wiring** — `fpl/entry.py` was built last week and connected
+      to nothing; it now flows into the run record, with league standings and
+      season points parsed onto `EntrySummary`.
+- [x] **Price snapshot** — `data/snapshots/2026-08-28.json` (616 players).
+      Run this DAILY; purchase price is only reconstructible going forward.
+- [ ] **Retry 3 blocked transcripts** before the paid run: fpl-blackbox,
+      fpltips, fpl-dylan. We were IP-blocked mid-harvest on 2026-08-27.
+- [ ] **Run extraction, then solve.** See `docs/deadline-runbook.md`.
+- [ ] **Transfer recommender does not exist yet** — the pipeline still solves
+      a fresh 15 from £100m, which is the WRONG question in-season. With 1 FT
+      and no bank, do not ship its squad output as-is.
 
 ## NEXT — in-season (the actual product)
 
@@ -59,6 +76,16 @@ is it worth -4?" Different objective, much smaller search space.
       automating against their session, an account-risk question).
 
 ## KNOWN ISSUES
+
+- [ ] **YouTube IP-blocks under burst load** — harvesting ~34 transcripts in
+      one go tripped an `IpBlocked` on 2026-08-27. `warm_cache` stops the run
+      on the first block rather than hammering it. Needs rate limiting, or the
+      residential-proxy path already noted under deployment.
+- [ ] **A creator whose only content is titled for the PREVIOUS gameweek is
+      dropped.** `is_gameweek_video` rejects an explicit wrong-gameweek number
+      outright, which cost us fpl-family for GW2 ("FPL GW1 Review + BIG
+      Transfers Incoming"). Deliberate — the alternative is picking up stale
+      videos — but revisit if it keeps costing real creators.
 
 - [ ] **Phonetic name mangles still unresolved** — ~71 of 478 picks. `'Virgil van Djk'`,
       `'Dominic Calvalu'`, `'In Burmo'`, `'Victor Yres'`. First-name references were
