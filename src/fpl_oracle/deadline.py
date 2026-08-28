@@ -269,6 +269,14 @@ def main(argv: list[str] | None = None) -> int:
     # The owner would watch several silent minutes of paid extraction with no
     # way to tell eighteen successes from zero.
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # httpx logs every request URL at INFO — and the YouTube Data API takes
+    # its key as a URL QUERY PARAMETER, so INFO-level httpx logging prints
+    # the key in clear text to the terminal and into any captured log. That
+    # is a straight violation of "secrets never printed" (CLAUDE.md), and it
+    # was introduced by the basicConfig line above, whose only purpose is to
+    # unmask OUR stage progress. Silence the transport; keep our own logs.
+    for noisy in ("httpx", "httpcore", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     nuance = not args.no_nuance
 
