@@ -920,7 +920,7 @@ class TestAvailability:
             creators=[],
             availability={},
         )
-        assert "Every squad member is fully available." in report
+        assert "Every member of the solver's squad is fully available." in report
 
     def test_doubtful_player_appears_in_squad_table_row(self) -> None:
         pool = _basic_pool()

@@ -271,10 +271,10 @@ def _render_squad_tables(
         "Detractors",
         "Availability",
     ]
-    lines = ["## Starting XI", ""]
+    lines = ["## Starting XI — solver's £100m squad", ""]
     xi = _sorted_group(squad.starting_xi)
     lines += _table(headers, [_squad_row(p, db, record, scores, availability) for p in xi])
-    lines += ["", "## Bench", ""]
+    lines += ["", "## Bench — solver's £100m squad", ""]
     bench = _sorted_group(squad.bench)
     lines += _table(headers, [_squad_row(p, db, record, scores, availability) for p in bench])
     lines.append("")
@@ -299,7 +299,13 @@ def _availability_text(verdict: AvailabilityVerdict) -> str:
 def _render_availability_callout(
     squad: Squad, availability: dict[int, AvailabilityVerdict], db: PlayerDB
 ) -> list[str]:
-    lines = ["## Availability", ""]
+    # NAME THE SQUAD. Since the transfer section landed, this report
+    # covers two different squads — the one the owner OWNS and the
+    # £100m-optimal one the solver built. Without a qualifier here, a
+    # report can say "Chiesa is unavailable" in the transfer section and
+    # "every squad member is fully available" four lines later, both
+    # true of different squads and together reading as a contradiction.
+    lines = ["## Availability — solver's £100m squad", ""]
     flagged = [
         (player, availability[player.player_id])
         for player in squad.players
@@ -307,7 +313,13 @@ def _render_availability_callout(
         and availability[player.player_id].availability is not Availability.AVAILABLE
     ]
     if not flagged:
-        lines += ["Every squad member is fully available.", ""]
+        lines += [
+            (
+                "Every member of the solver's squad is fully available. "
+                "(For YOUR squad, see the transfer section above.)"
+            ),
+            "",
+        ]
         return lines
     flagged.sort(key=lambda pair: (_POSITION_ORDER[pair[0].position], pair[0].player_id))
     for player, verdict in flagged:
@@ -792,6 +804,83 @@ def _render_diff(diff: SquadDiff | None, db: PlayerDB) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+_SOLVER_SQUAD_CAVEAT = (
+    "> The squad sections below answer a DIFFERENT question: the best 15 for £100m "
+    "from scratch. That is the wildcard/free-hit answer, not something you can act "
+    "on with one free transfer. Act on the transfer section above."
+)
+
+
+def _render_transfer(record: RunRecord) -> list[str]:
+    """The in-season answer, rendered FIRST — ahead of the squad tables.
+
+    Everything below it describes a squad built from £100m, which is the
+    wildcard question. This section is the one the owner can actually act
+    on with the free transfer they have, so it leads.
+    """
+    rec = record.transfer_recommendation
+    if rec is None:
+        if not record.transfer_note:
+            return []
+        return ["## This week's transfer", "", f"_{record.transfer_note}_", ""]
+
+    lines = [f"## This week's transfer — {rec.verdict}", "", rec.reasoning, ""]
+
+    if rec.unavailable_owned:
+        lines += [
+            f"> **Unavailable in your squad:** {', '.join(rec.unavailable_owned)}",
+            "",
+        ]
+
+    if rec.recommended is not None:
+        m = rec.recommended
+        lines += [
+            f"**{m.out_name} → {m.in_name}**  ",
+            (
+                f"Δ{m.delta:+.2f} · {m.price_delta_m:+.1f}m · "
+                f"{m.in_backers} backers (was {m.out_backers}) · {m.affordability}"
+            ),
+            "",
+        ]
+        for note in m.notes:
+            lines += [f"> {note}", ""]
+
+    if rec.shortlist:
+        lines += [
+            "| Out | In | Δ | Price | Backers | Affordable |",
+            "| --- | --- | ---: | ---: | ---: | --- |",
+        ]
+        for m in rec.shortlist:
+            lines.append(
+                f"| {m.out_name} | {m.in_name} | {m.delta:+.2f} | "
+                f"{m.price_delta_m:+.1f}m | {m.out_backers}→{m.in_backers} | "
+                f"{m.affordability} |"
+            )
+        lines.append("")
+
+    if rec.worth_considering:
+        lines += [
+            "### Worth considering, not recommended",
+            "",
+            (
+                "These have real creator backing but would cost a \u22124, and this "
+                "system deliberately will not price a hit: consensus scores are "
+                "band-relative and carry no points unit, so any 'worth it' threshold "
+                "would be invented. Your call, with the evidence above."
+            ),
+            "",
+        ]
+        for m in rec.worth_considering:
+            lines.append(
+                f"- **{m.out_name} → {m.in_name}** ({m.in_backers} backers, Δ{m.delta:+.2f})"
+            )
+        lines.append("")
+
+    lines += [f"_Free transfers: {rec.free_transfers}. Pricing: {rec.pricing_note}_", ""]
+    lines += [_SOLVER_SQUAD_CAVEAT, ""]
+    return lines
+
+
 def render_report(
     *,
     record: RunRecord,
@@ -822,6 +911,7 @@ def render_report(
 
     lines: list[str] = []
     lines += _render_header(record, squad, extractions)
+    lines += _render_transfer(record)
     lines += _render_diff(diff, db)
     lines += _render_availability_callout(squad, availability, db)
     lines += _render_squad_tables(squad, db, record, scores, availability)
