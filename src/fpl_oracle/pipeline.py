@@ -64,13 +64,16 @@ from fpl_oracle.fpl.entry import (
     fetch_my_squad,
     get_entry_id,
 )
-from fpl_oracle.fpl.players import PlayerDB, Position
+from fpl_oracle.fpl.players import Player, PlayerDB, Position
+from fpl_oracle.fpl.selling import derive_squad_pricing
+from fpl_oracle.fpl.snapshot import derive_purchase_prices
 from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.report.models import NuanceRecord, SquadNuance
 from fpl_oracle.roster.models import Creator
 from fpl_oracle.roster.registry import REGISTRY
 from fpl_oracle.roster.weights import weight_for
 from fpl_oracle.solver.squad import Squad, build_squad
+from fpl_oracle.solver.transfers import TransferRecommendation, recommend_transfer
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +256,17 @@ class RunRecord(BaseModel):
             "picks aren't public yet, or the fetch failed — see my_squad_note for which. "
             "Defaults to None so run.json files written before this field existed still parse."
         ),
+    )
+    transfer_recommendation: TransferRecommendation | None = Field(
+        default=None,
+        description=(
+            "the in-season answer: roll, use the free transfer, or fix a forced hole. "
+            "None when no owned squad was available to reason about."
+        ),
+    )
+    transfer_note: str = Field(
+        default="",
+        description="the recommendation's reasoning, or why there isn't one",
     )
     my_squad_note: str = Field(
         default="",
@@ -838,6 +852,46 @@ def _render_report(
     return report_path
 
 
+def _recommend_transfer_for(
+    *,
+    my_squad: MySquadSummary,
+    db: PlayerDB,
+    pool: list[Player],
+    scores: dict[int, PlayerScore],
+    verdicts: dict[int, AvailabilityVerdict],
+    gameweek: int | None,
+) -> TransferRecommendation:
+    """Adapt pipeline state into `solver.transfers.recommend_transfer`.
+
+    Selling prices are DERIVED here (see `fpl.selling`) rather than read:
+    the public picks endpoint doesn't carry them, but purchase price is
+    recoverable from the transfer log and season-start prices, and the
+    selling rule is deterministic from there. `derive_squad_pricing`
+    reconciles its own total against FPL's reported squad value, so a
+    derivation that doesn't add up degrades to UNVERIFIED affordability
+    instead of a confident wrong number.
+    """
+    owned_ids = [p.player_id for p in my_squad.players]
+    owned = [player for player in (db.get(pid) for pid in owned_ids) if player is not None]
+    elements_by_id = {e["id"]: e for e in fpl_client.get_bootstrap_static().get("elements", [])}
+    pricing = derive_squad_pricing(
+        owned_player_ids=owned_ids,
+        elements_by_id=elements_by_id,
+        purchase_from_transfers=derive_purchase_prices(my_squad.entry_id).known,
+        bank=my_squad.bank,
+        reported_squad_value=my_squad.team_value,
+    )
+    return recommend_transfer(
+        owned=owned,
+        pool=pool,
+        scores=scores,
+        verdicts=verdicts,
+        pricing=pricing,
+        free_transfers=my_squad.free_transfers,
+        gameweek=gameweek,
+    )
+
+
 def run_pipeline(
     extractions_dir: Path = DEFAULT_EXTRACTIONS_DIR,
     runs_dir: Path = DEFAULT_RUNS_DIR,
@@ -952,6 +1006,27 @@ def run_pipeline(
             logger.warning("pipeline: my_squad_fn raised: %s", e)
             my_squad_summary, my_squad_note = None, f"my-squad fetch failed: {e}"
 
+    # The in-season answer. Depends on my-squad, so it can only run when
+    # that succeeded; like my-squad itself it is computed AFTER the solve
+    # and cannot influence it. `build_squad`'s output stays the
+    # wildcard/free-hit answer; this is the "given what you own" one.
+    transfer_rec: TransferRecommendation | None = None
+    transfer_note = "no owned squad available — transfer recommendation skipped"
+    if my_squad_summary is not None:
+        try:
+            transfer_rec = _recommend_transfer_for(
+                my_squad=my_squad_summary,
+                db=db,
+                pool=pool,
+                scores=scores,
+                verdicts=availability.verdicts,
+                gameweek=gameweek,
+            )
+            transfer_note = transfer_rec.reasoning
+        except Exception as e:  # noqa: BLE001 - never cost the run its squad
+            logger.warning("pipeline: transfer recommendation failed: %s", e)
+            transfer_note = f"transfer recommendation failed: {e}"
+
     finished_at = datetime.now(UTC)
     run_id, run_dir = _reserve_run_dir(runs_dir, _base_run_id(started_at, git))
 
@@ -964,6 +1039,8 @@ def run_pipeline(
         git=git,
         inputs=[_extraction_input(path, raw, resolved) for path, raw, resolved in loaded],
         gameweek=gameweek,
+        transfer_recommendation=transfer_rec,
+        transfer_note=transfer_note,
         excluded_wrong_gameweek=[f"{path.name} (GW{found})" for path, found in wrong_gameweek],
         superseded_inputs=[
             _extraction_input(path, raw, resolved) for path, raw, resolved in superseded
@@ -1159,6 +1236,33 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {lg.name}: {rank}/{count}")
     else:
         print(f"my squad: not recorded — {record.my_squad_note}")
+    # The in-season answer, printed last because it is the thing to act on.
+    rec = record.transfer_recommendation
+    if rec is not None:
+        print(f"\n=== GW{rec.gameweek} TRANSFER: {rec.verdict} ===")
+        print(f"  {rec.reasoning}")
+        if rec.unavailable_owned:
+            print(f"  UNAVAILABLE IN YOUR SQUAD: {', '.join(rec.unavailable_owned)}")
+        if rec.recommended is not None:
+            m = rec.recommended
+            print(
+                f"  -> {m.out_name} OUT, {m.in_name} IN  "
+                f"({m.delta:+.2f}, {m.price_delta_m:+.1f}m, "
+                f"{m.in_backers} backers, {m.affordability})"
+            )
+            for note in m.notes:
+                print(f"     note: {note}")
+        if rec.shortlist:
+            print("  also considered:")
+            for m in rec.shortlist:
+                print(
+                    f"    {m.out_name:16} -> {m.in_name:16} {m.delta:+.2f}  "
+                    f"backers {m.out_backers}->{m.in_backers}  {m.affordability}"
+                )
+        print(f"  pricing: {rec.pricing_note}")
+    elif record.transfer_note:
+        print(f"\ntransfer recommendation: {record.transfer_note}")
+
     return 0
 
 
