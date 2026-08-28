@@ -195,7 +195,10 @@ class TestListRecentVideosCacheFreshness:
         monkeypatch.setenv("YOUTUBE_API_KEY", "test-key")
         self._seed_uploads_playlist_cache(tmp_path)
 
-        uploads_cache = youtube_client._cache_path("uploads", self._CHANNEL_ID)
+        # The uploads cache key includes max_results (a shared key silently
+        # served a shallow listing to a deep caller), so the seeded path must
+        # match the depth list_recent_videos is called with below.
+        uploads_cache = youtube_client._cache_path("uploads", f"{self._CHANNEL_ID}-10")
         uploads_cache.write_text(json.dumps(_CANNED_PLAYLIST_ITEMS_RESPONSE))
         stale_mtime = time.time() - 7 * 60 * 60  # 7h old, past the 6h freshness window
         os.utime(uploads_cache, (stale_mtime, stale_mtime))
@@ -218,7 +221,10 @@ class TestListRecentVideosCacheFreshness:
         monkeypatch.setattr(youtube_client, "CACHE_DIR", tmp_path)
         self._seed_uploads_playlist_cache(tmp_path)
 
-        uploads_cache = youtube_client._cache_path("uploads", self._CHANNEL_ID)
+        # The uploads cache key includes max_results (a shared key silently
+        # served a shallow listing to a deep caller), so the seeded path must
+        # match the depth list_recent_videos is called with below.
+        uploads_cache = youtube_client._cache_path("uploads", f"{self._CHANNEL_ID}-10")
         uploads_cache.write_text(json.dumps(_CANNED_PLAYLIST_ITEMS_RESPONSE))
         # Leave mtime as "now" — well within the 6h freshness window.
 

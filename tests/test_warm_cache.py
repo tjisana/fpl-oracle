@@ -9,8 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-import requests
-from youtube_transcript_api import RequestBlocked, YouTubeRequestFailed
+from youtube_transcript_api import RequestBlocked
 
 from fpl_oracle.ingest import warm_cache
 from fpl_oracle.ingest.transcripts import Transcript, TranscriptSegment
@@ -297,7 +296,7 @@ class TestWarmCreator:
 
         monkeypatch.setattr(warm_cache, "fetch_transcript", blocked)
 
-        with pytest.raises(RequestBlocked):
+        with pytest.raises(warm_cache.WarmingInterrupted) as excinfo:
             warm_creator(
                 creator,
                 [creator],
@@ -305,7 +304,9 @@ class TestWarmCreator:
                 max_per_creator=5,
                 dir=tmp_path,
                 dry_run=False,
+                delay_seconds=0.0,
             )
+        assert "RequestBlocked" in excinfo.value.reason
 
 
 class TestRunWarmCache:
@@ -313,7 +314,7 @@ class TestRunWarmCache:
         creators = [_creator("a"), _creator("b")]
         monkeypatch.setattr(warm_cache, "REGISTRY", creators)
 
-        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run):
+        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run, **kw):
             if creator.creator_id == "a":
                 return CreatorWarmSummary(
                     creator_id="a",
@@ -347,7 +348,7 @@ class TestRunWarmCache:
         monkeypatch.setattr(warm_cache, "REGISTRY", creators)
         called: list[str] = []
 
-        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run):
+        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run, **kw):
             called.append(creator.creator_id)
             if creator.creator_id == "a":
                 return CreatorWarmSummary(
@@ -358,9 +359,7 @@ class TestRunWarmCache:
                     newly_fetched=1,
                     failed=0,
                 )
-            raise YouTubeRequestFailed(
-                video_id="x", http_error=requests.exceptions.HTTPError("blocked")
-            )
+            raise warm_cache.WarmingInterrupted(f"{creator.creator_id}: YouTubeRequestFailed", [])
 
         monkeypatch.setattr(warm_cache, "warm_creator", fake_warm_creator)
 
@@ -377,7 +376,7 @@ class TestRunWarmCache:
         monkeypatch.setattr(warm_cache, "REGISTRY", creators)
         seen_dry_run: list[bool] = []
 
-        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run):
+        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run, **kw):
             seen_dry_run.append(dry_run)
             return CreatorWarmSummary(
                 creator_id=creator.creator_id,
@@ -393,3 +392,308 @@ class TestRunWarmCache:
         run_warm_cache(since=datetime(2026, 8, 1, tzinfo=UTC), dry_run=True)
 
         assert seen_dry_run == [True]
+
+
+class TestThrottle:
+    """The first live run pulled 34 transcripts in 59s and was IP-blocked.
+    The throttle is the fix; these pin that it applies to network work and
+    only to network work."""
+
+    def test_network_fetches_sleep_between_them(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        videos = [
+            _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+            _video("v2", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+            _video("v3", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+        ]
+        monkeypatch.setattr(warm_cache, "videos_to_warm", lambda *a, **k: videos)
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "fetch_transcript", lambda vid, dir: _transcript(vid))
+        monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
+        slept: list[float] = []
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=2.0,
+            sleep=slept.append,
+        )
+
+        assert len(slept) == 3, "every network fetch must be throttled"
+        # jitter is +/-40%, so each delay stays inside [1.2, 2.8]
+        assert all(1.2 <= d <= 2.8 for d in slept), slept
+
+    def test_cached_hits_never_sleep(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [_video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))],
+        )
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: _transcript(vid))
+        slept: list[float] = []
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=2.0,
+            sleep=slept.append,
+        )
+
+        assert slept == [], "a fully cached creator must not sleep at all"
+
+    def test_dry_run_never_sleeps(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [_video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))],
+        )
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        slept: list[float] = []
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            True,
+            delay_seconds=2.0,
+            sleep=slept.append,
+        )
+
+        assert slept == []
+
+
+class TestCircuitBreaker:
+    """`fetch_transcript` returns None (not an exception) for anti-bot
+    states like PoTokenRequired and YouTubeDataUnparsable, which are
+    CouldNotRetrieveTranscript subclasses outside its re-raise set. Without
+    a breaker a blocked run marks EVERY video 'no transcript available',
+    exits 0, and looks finished."""
+
+    def test_trips_after_consecutive_failures_with_no_success(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        creator = _creator("a")
+        n = warm_cache.CONSECUTIVE_FAILURE_LIMIT + 3
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [
+                _video(f"v{i}", published_at=datetime(2026, 8, 25, tzinfo=UTC)) for i in range(n)
+            ],
+        )
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "fetch_transcript", lambda vid, dir: None)
+
+        with pytest.raises(warm_cache.WarmingInterrupted) as excinfo:
+            warm_creator(
+                creator,
+                [creator],
+                datetime(2026, 8, 1, tzinfo=UTC),
+                5,
+                tmp_path,
+                False,
+                delay_seconds=0.0,
+                breaker=warm_cache._FailureStreak(),
+            )
+
+        assert "in a row" in excinfo.value.reason
+        # the outcomes recorded before tripping are carried out, not lost
+        assert len(excinfo.value.outcomes) == warm_cache.CONSECUTIVE_FAILURE_LIMIT
+
+    def test_a_success_resets_the_streak(self) -> None:
+        breaker = warm_cache._FailureStreak(limit=3)
+        assert breaker.record_failure() is False
+        assert breaker.record_failure() is False
+        breaker.record_success()
+        assert breaker.record_failure() is False, "success must reset the streak"
+
+    def test_genuinely_caption_less_videos_do_not_trip_it(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """A creator with a couple of caption-less uploads is normal and
+        must not be mistaken for a block."""
+        creator = _creator("a")
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [
+                _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+                _video("v2", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+            ],
+        )
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "fetch_transcript", lambda vid, dir: None)
+
+        summary = warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=0.0,
+            breaker=warm_cache._FailureStreak(),
+        )
+
+        assert summary.failed == 2
+
+
+class TestPartialProgressIsPreserved:
+    def test_in_flight_creator_keeps_the_transcripts_it_did_fetch(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """Real integration of run_warm_cache + warm_creator, not two
+        halves faked separately. Creator 'a' fetches two transcripts, then
+        the third is blocked; both must survive into the summary."""
+        creators = [_creator("a"), _creator("b")]
+        monkeypatch.setattr(warm_cache, "REGISTRY", creators)
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [
+                _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+                _video("v2", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+                _video("v3", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+            ],
+        )
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
+
+        def fetch(vid, dir):
+            if vid == "v3":
+                raise RequestBlocked(video_id=vid)
+            return _transcript(vid)
+
+        monkeypatch.setattr(warm_cache, "fetch_transcript", fetch)
+
+        result = run_warm_cache(
+            since=datetime(2026, 8, 1, tzinfo=UTC), delay_seconds=0.0, sleep=lambda _: None
+        )
+
+        assert result.blocked is True
+        assert [c.creator_id for c in result.creators] == ["a"]
+        assert result.creators[0].newly_fetched == 2, "work already done must not vanish"
+        assert result.total_creators == 2
+        assert result.never_attempted == 1
+
+    def test_unexpected_exception_still_yields_a_summary(self, monkeypatch) -> None:
+        """A connection reset must not escape as a traceback and destroy
+        the report of everything fetched before it."""
+        creators = [_creator("a"), _creator("b")]
+        monkeypatch.setattr(warm_cache, "REGISTRY", creators)
+
+        def fake_warm_creator(creator, registry, since, max_per_creator, dir, dry_run, **kw):
+            if creator.creator_id == "a":
+                return CreatorWarmSummary(
+                    creator_id="a",
+                    creator_name="a",
+                    considered=1,
+                    already_cached=0,
+                    newly_fetched=1,
+                    failed=0,
+                )
+            raise ConnectionResetError("connection reset by peer")
+
+        monkeypatch.setattr(warm_cache, "warm_creator", fake_warm_creator)
+
+        result = run_warm_cache(since=datetime(2026, 8, 1, tzinfo=UTC))
+
+        assert result.blocked is True
+        assert "ConnectionResetError" in (result.blocked_reason or "")
+        assert result.newly_fetched == 1, "creator a's work is still reported"
+
+
+class TestDirIsHonoured:
+    """Every fake in this suite previously accepted `dir` and ignored it,
+    so a regression to the default directory would have passed the whole
+    suite — while writing transcripts where extraction cannot see them."""
+
+    def test_dir_reaches_every_transcript_call(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        target = tmp_path / "somewhere-else"
+        seen: dict[str, list[Path]] = {"load": [], "fetch": [], "save": []}
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [_video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))],
+        )
+        monkeypatch.setattr(
+            warm_cache, "load_transcript", lambda vid, dir: seen["load"].append(dir) or None
+        )
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript",
+            lambda vid, dir: seen["fetch"].append(dir) or _transcript(vid),
+        )
+        monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: seen["save"].append(dir))
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            target,
+            False,
+            delay_seconds=0.0,
+        )
+
+        assert seen["load"] == [target]
+        assert seen["fetch"] == [target]
+        assert seen["save"] == [target]
+
+
+class TestMain:
+    def test_dir_and_delay_reach_run_warm_cache(self, monkeypatch, tmp_path: Path) -> None:
+        seen: dict = {}
+
+        def fake_run(**kwargs):
+            seen.update(kwargs)
+            return warm_cache.WarmCacheRunSummary(creators=[], dry_run=False, total_creators=0)
+
+        monkeypatch.setattr(warm_cache, "run_warm_cache", fake_run)
+        rc = warm_cache.main(["--dir", str(tmp_path), "--delay", "3.5", "--since", "2026-08-22"])
+
+        assert rc == 0
+        assert seen["dir"] == tmp_path
+        assert seen["delay_seconds"] == 3.5
+        assert seen["since"] == datetime(2026, 8, 22, tzinfo=UTC)
+
+    def test_blocked_run_exits_nonzero(self, monkeypatch) -> None:
+        """The exit code is how a scheduled run signals it needs attention."""
+        monkeypatch.setattr(
+            warm_cache,
+            "run_warm_cache",
+            lambda **k: warm_cache.WarmCacheRunSummary(
+                creators=[],
+                dry_run=False,
+                blocked=True,
+                blocked_reason="IpBlocked",
+                total_creators=5,
+            ),
+        )
+        assert warm_cache.main([]) == 2
+
+    def test_dry_run_forces_zero_delay(self, monkeypatch) -> None:
+        seen: dict = {}
+        monkeypatch.setattr(
+            warm_cache,
+            "run_warm_cache",
+            lambda **k: (
+                seen.update(k)
+                or warm_cache.WarmCacheRunSummary(creators=[], dry_run=True, total_creators=0)
+            ),
+        )
+        warm_cache.main(["--dry-run", "--delay", "5"])
+        assert seen["delay_seconds"] == 0.0, "a dry run makes no network calls, so never waits"

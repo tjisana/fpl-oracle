@@ -19,7 +19,10 @@ transcript fetch.
 from __future__ import annotations
 
 import logging
+import random
 import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -53,6 +56,28 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SINCE_DAYS = 7
 DEFAULT_MAX_PER_CREATOR = 5
+
+# Seconds to wait between transcript fetches that actually hit the network
+# (cached hits don't sleep). NOT arbitrary: the first live run pulled 34
+# transcripts in 59 seconds and was IP-blocked immediately afterwards.
+# Each transcript costs ~3 requests to youtube.com, so that burst ran at
+# ~1.7 req/s sustained, unauthenticated, from one residential IP.
+# ~2s with jitter puts us near 1 request every 2 seconds, which costs a
+# few minutes across the whole roster and is the difference between a
+# warm cache and a blocked one on deadline eve.
+DEFAULT_FETCH_DELAY_SECONDS = 2.0
+# Jitter fraction applied to the delay, so we don't hammer a metronome-
+# regular pattern that is itself a bot signal.
+FETCH_DELAY_JITTER = 0.4
+
+# Circuit breaker. `fetch_transcript` only re-raises RequestBlocked and
+# YouTubeRequestFailed; other environmental anti-bot states
+# (PoTokenRequired, YouTubeDataUnparsable — both CouldNotRetrieveTranscript
+# subclasses) come back as a plain None, indistinguishable from "this video
+# has no captions". A run in that state would mark EVERY video failed,
+# never trip the block path, and exit 0 looking finished. So: if this many
+# fetches fail in a row without a single success, stop and say so.
+CONSECUTIVE_FAILURE_LIMIT = 6
 
 # How many of a channel's newest uploads to list before date/duration
 # filtering and the --max-per-creator cap are applied. Generous headroom
@@ -109,8 +134,24 @@ class WarmCacheRunSummary(BaseModel):
     blocked: bool = False
     blocked_reason: str | None = Field(
         default=None,
-        description="set when a RequestBlocked/YouTubeRequestFailed stopped the run early",
+        description="set when a block or the circuit breaker stopped the run early",
     )
+    total_creators: int = Field(
+        default=0,
+        description=(
+            "eligible creators the run intended to cover. On a blocked run this is the "
+            "denominator the per-creator table lacks — without it the table reads as full "
+            "coverage when most creators were never attempted."
+        ),
+    )
+
+    @property
+    def attempted(self) -> int:
+        return len(self.creators)
+
+    @property
+    def never_attempted(self) -> int:
+        return max(0, self.total_creators - self.attempted)
 
     @property
     def considered(self) -> int:
@@ -203,6 +244,50 @@ def videos_to_warm(
     return selectable[:max_per_creator]
 
 
+class _FailureStreak:
+    """Counts consecutive transcript-fetch failures across the whole run.
+    Any success resets it. Trips once `limit` failures occur back to back —
+    the signal that we are being blocked rather than reading a run of
+    caption-less videos."""
+
+    def __init__(self, limit: int = CONSECUTIVE_FAILURE_LIMIT) -> None:
+        self.limit = limit
+        self.consecutive = 0
+
+    def record_failure(self) -> bool:
+        """Record a failure; return True if the breaker has now tripped."""
+        self.consecutive += 1
+        return self.consecutive >= self.limit
+
+    def record_success(self) -> None:
+        self.consecutive = 0
+
+
+class WarmingInterrupted(Exception):
+    """Raised out of `warm_creator` when the run must stop mid-creator —
+    an environmental block, or the circuit breaker tripping. Carries the
+    outcomes already completed for that creator so the caller can still
+    report work that really happened (transcripts already saved to disk),
+    instead of dropping the in-flight creator from the summary."""
+
+    def __init__(self, reason: str, outcomes: list[VideoWarmOutcome]) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.outcomes = outcomes
+
+
+def _summarise(creator: Creator, outcomes: list[VideoWarmOutcome]) -> CreatorWarmSummary:
+    return CreatorWarmSummary(
+        creator_id=creator.creator_id,
+        creator_name=creator.name,
+        considered=len(outcomes),
+        already_cached=sum(1 for o in outcomes if o.already_cached),
+        newly_fetched=sum(1 for o in outcomes if o.newly_fetched),
+        failed=sum(1 for o in outcomes if o.failed),
+        videos=outcomes,
+    )
+
+
 def warm_creator(
     creator: Creator,
     registry: list[Creator],
@@ -210,27 +295,33 @@ def warm_creator(
     max_per_creator: int,
     dir: Path,
     dry_run: bool,
+    delay_seconds: float = DEFAULT_FETCH_DELAY_SECONDS,
+    breaker: _FailureStreak | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> CreatorWarmSummary:
     """Warm (or, in `dry_run`, just report on) one creator's candidate
     videos. Video-listing failures (`YouTubeApiError`) are caught and
     recorded as a creator-level failure — non-fatal, same discipline as
-    `run_extract.py`. `RequestBlocked` / `YouTubeRequestFailed` from
-    `fetch_transcript` are deliberately NOT caught here: those are
-    environmental (this IP/request is blocked), not a fact about this
-    creator, and the caller decides whether to stop the whole run."""
+    `run_extract.py`.
+
+    Stops the whole run, via `WarmingInterrupted` carrying the outcomes
+    completed so far, when either:
+
+    * `fetch_transcript` raises `RequestBlocked`/`YouTubeRequestFailed` —
+      environmental (this IP is blocked), not a fact about this creator; or
+    * `breaker` trips, meaning enough fetches have failed in a row with no
+      success that "these videos have no captions" is no longer the
+      plausible explanation (see `CONSECUTIVE_FAILURE_LIMIT`).
+
+    Network fetches are throttled by `delay_seconds` with jitter; cached
+    hits never sleep."""
     try:
         videos = videos_to_warm(creator, registry, since, max_per_creator)
     except YouTubeApiError as e:
         logger.warning("warm_cache: %s — video listing failed: %s", creator.creator_id, e)
-        return CreatorWarmSummary(
-            creator_id=creator.creator_id,
-            creator_name=creator.name,
-            considered=0,
-            already_cached=0,
-            newly_fetched=0,
-            failed=0,
-            error=f"video listing failed: {e}",
-        )
+        summary = _summarise(creator, [])
+        summary.error = f"video listing failed: {e}"
+        return summary
 
     outcomes: list[VideoWarmOutcome] = []
     for video in videos:
@@ -258,7 +349,19 @@ def warm_creator(
             )
             continue
 
-        transcript = fetch_transcript(video.video_id, dir=dir)
+        # Throttle only real network work. Sleeping BEFORE the fetch (not
+        # after) means a run that is entirely cache hits never sleeps at all.
+        if delay_seconds > 0:
+            jitter = delay_seconds * FETCH_DELAY_JITTER
+            sleep(max(0.0, delay_seconds + random.uniform(-jitter, jitter)))
+
+        try:
+            transcript = fetch_transcript(video.video_id, dir=dir)
+        except (RequestBlocked, YouTubeRequestFailed) as e:
+            raise WarmingInterrupted(
+                f"{creator.creator_id}: {type(e).__name__}: {e}", outcomes
+            ) from e
+
         if transcript is None:
             logger.info(
                 "warm_cache: no transcript for '%s' (%s) — %s",
@@ -276,9 +379,18 @@ def warm_creator(
                     failure_reason="no transcript available",
                 )
             )
+            if breaker is not None and breaker.record_failure():
+                raise WarmingInterrupted(
+                    f"{breaker.limit} transcript fetches failed in a row with no success "
+                    f"(last: {creator.creator_id}/{video.video_id}) — this looks like an "
+                    f"environmental block, not {breaker.limit} caption-less videos",
+                    outcomes,
+                )
             continue
 
         save_transcript(transcript, dir=dir)
+        if breaker is not None:
+            breaker.record_success()
         outcomes.append(
             VideoWarmOutcome(
                 video_id=video.video_id,
@@ -289,15 +401,7 @@ def warm_creator(
             )
         )
 
-    return CreatorWarmSummary(
-        creator_id=creator.creator_id,
-        creator_name=creator.name,
-        considered=len(outcomes),
-        already_cached=sum(1 for o in outcomes if o.already_cached),
-        newly_fetched=sum(1 for o in outcomes if o.newly_fetched),
-        failed=sum(1 for o in outcomes if o.failed),
-        videos=outcomes,
-    )
+    return _summarise(creator, outcomes)
 
 
 def run_warm_cache(
@@ -306,35 +410,63 @@ def run_warm_cache(
     dir: Path = DEFAULT_TRANSCRIPT_DIR,
     creator_ids: list[str] | None = None,
     dry_run: bool = False,
+    delay_seconds: float = DEFAULT_FETCH_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> WarmCacheRunSummary:
     """Warm the transcript cache across every eligible (optionally
     `creator_ids`-filtered) creator. Per-creator failures are non-fatal.
 
-    If `fetch_transcript` ever raises `RequestBlocked` / `YouTubeRequestFailed`
-    (an environmental signal — this IP or request is blocked, not a fact
-    about one video), the run stops immediately rather than continuing to
-    hammer a block across the remaining creators; creators processed before
-    the stop are still reported."""
+    The run stops early, reporting everything completed so far, when the
+    environment turns against us: an explicit `RequestBlocked` /
+    `YouTubeRequestFailed`, or the consecutive-failure circuit breaker
+    tripping on anti-bot states that arrive disguised as ordinary
+    per-video misses. The in-flight creator's completed work is preserved
+    in the summary — those transcripts are on disk, and a report that
+    omitted them would understate what tomorrow's extraction can use.
+
+    Anything else unexpected (a connection reset, a DNS blip) is recorded
+    against the run and also stops it, rather than escaping as a traceback
+    that would lose the summary entirely."""
     creators = eligible_creators_filtered(creator_ids)
     summaries: list[CreatorWarmSummary] = []
+    breaker = _FailureStreak()
     blocked = False
     blocked_reason: str | None = None
 
     for creator in creators:
         try:
-            summary = warm_creator(creator, REGISTRY, since, max_per_creator, dir, dry_run)
-        except (RequestBlocked, YouTubeRequestFailed) as e:
-            blocked = True
-            blocked_reason = f"{creator.creator_id}: {type(e).__name__}: {e}"
-            logger.error(
-                "warm_cache: transcript fetching blocked — stopping run early: %s",
-                blocked_reason,
+            summary = warm_creator(
+                creator,
+                REGISTRY,
+                since,
+                max_per_creator,
+                dir,
+                dry_run,
+                delay_seconds=delay_seconds,
+                breaker=breaker,
+                sleep=sleep,
             )
+        except WarmingInterrupted as e:
+            blocked = True
+            blocked_reason = e.reason
+            # The in-flight creator really did fetch these before we stopped.
+            if e.outcomes:
+                summaries.append(_summarise(creator, e.outcomes))
+            logger.error("warm_cache: stopping run early — %s", blocked_reason)
+            break
+        except Exception as e:  # noqa: BLE001 - see docstring: never lose the summary
+            blocked = True
+            blocked_reason = f"{creator.creator_id}: unexpected {type(e).__name__}: {e}"
+            logger.error("warm_cache: stopping run early — %s", blocked_reason)
             break
         summaries.append(summary)
 
     return WarmCacheRunSummary(
-        creators=summaries, dry_run=dry_run, blocked=blocked, blocked_reason=blocked_reason
+        creators=summaries,
+        dry_run=dry_run,
+        blocked=blocked,
+        blocked_reason=blocked_reason,
+        total_creators=len(creators),
     )
 
 
@@ -377,10 +509,17 @@ def print_summary(summary: WarmCacheRunSummary, console: Console | None = None) 
             f"{summary.newly_fetched} newly fetched, {summary.failed} failed"
         )
 
+    if summary.never_attempted:
+        console.print(
+            f"[bold yellow]{summary.attempted}/{summary.total_creators} creators attempted — "
+            f"{summary.never_attempted} never reached.[/bold yellow] The table above is NOT "
+            f"full coverage."
+        )
+
     nothing = summary.creators_with_nothing
     if nothing:
         console.print(
-            "\n[bold]Creators with NOTHING on disk in this window "
+            "\n[bold]Of the creators attempted, these have NOTHING on disk in this window "
             f"({len(nothing)}):[/bold] " + ", ".join(c.creator_id for c in nothing)
         )
 
@@ -427,11 +566,32 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list what would be fetched without fetching any transcript",
     )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=DEFAULT_FETCH_DELAY_SECONDS,
+        help=(
+            f"seconds to wait between transcript fetches that hit the network "
+            f"(default {DEFAULT_FETCH_DELAY_SECONDS}; 0 disables). The first unthrottled "
+            f"run pulled 34 transcripts in 59s and was IP-blocked."
+        ),
+    )
     args = parser.parse_args(argv)
 
     configure_logging()
 
     since = parse_since(args.since) if args.since else default_since()
+
+    # `extract/run_extract.py` calls `fetch_transcript` with no dir argument,
+    # so it can only ever read DEFAULT_TRANSCRIPT_DIR. Warming somewhere else
+    # produces a cache the paid extraction stage cannot see — silently.
+    if args.dir.resolve() != DEFAULT_TRANSCRIPT_DIR.resolve():
+        logger.warning(
+            "warm_cache: --dir is %s, but extraction only reads %s — transcripts warmed "
+            "here will NOT be visible to run_extract",
+            args.dir,
+            DEFAULT_TRANSCRIPT_DIR,
+        )
 
     summary = run_warm_cache(
         since=since,
@@ -439,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         dir=args.dir,
         creator_ids=args.creator_ids,
         dry_run=args.dry_run,
+        delay_seconds=0.0 if args.dry_run else args.delay,
     )
     print_summary(summary)
 

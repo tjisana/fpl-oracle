@@ -251,7 +251,13 @@ def list_recent_videos(
     if playlist_id is None:
         return []
 
-    cache_path = _cache_path("uploads", channel_id)
+    # The cache key MUST include max_results. Callers ask for different
+    # depths against the same channel (run_extract wants 10, warm_cache
+    # wants 25), and a shared key silently serves the shallower listing to
+    # the deeper caller — truncating its window with no error. deadline.py
+    # calls with force_refresh=True, which would otherwise overwrite the
+    # deep listing with a shallow one for the next 6 hours.
+    cache_path = _cache_path("uploads", f"{channel_id}-{max_results}")
     cache_is_fresh = (
         not force_refresh
         and cache_path.exists()

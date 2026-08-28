@@ -45,6 +45,9 @@ from pydantic import BaseModel
 from fpl_oracle.fpl import client
 from fpl_oracle.fpl.players import PlayerDB, Position
 
+# FPL numbers a squad's picks 1-15; 1-11 are the starting XI.
+XI_SIZE = 11
+
 ENTRY_ID_ENV_VAR = "FPL_ENTRY_ID"
 
 # Bankable free-transfer cap — per the fpl-domain skill's squad-rules
@@ -181,7 +184,14 @@ def build_my_squad(
                 player_id=player.player_id,
                 web_name=player.web_name,
                 position=player.position,
-                is_starting=pick.multiplier > 0,
+                # position, NOT multiplier. Under Bench Boost every one of
+                # the 15 picks has multiplier >= 1, so `multiplier > 0`
+                # reports all 15 as starters and the bench flag vanishes on
+                # exactly the gameweek it matters most. FPL numbers picks
+                # 1-11 as the XI and 12-15 as the bench, and that holds
+                # under every chip. (Autosubs are already reflected in the
+                # picks array, so position and multiplier agree there.)
+                is_starting=pick.position <= XI_SIZE,
                 is_captain=pick.is_captain,
                 is_vice_captain=pick.is_vice_captain,
                 multiplier=pick.multiplier,

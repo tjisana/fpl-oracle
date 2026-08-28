@@ -43,6 +43,7 @@ import hashlib
 import json
 import logging
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -215,6 +216,22 @@ class RunRecord(BaseModel):
     )
     git: GitInfo
     inputs: list[ExtractionInput]
+    gameweek: int | None = Field(
+        default=None,
+        description=(
+            "the gameweek this run solved for. Extractions about a DIFFERENT gameweek were "
+            "excluded from the vote (see `excluded_wrong_gameweek`); None means no filter "
+            "was applied and every stored extraction was loaded."
+        ),
+    )
+    excluded_wrong_gameweek: list[str] = Field(
+        default_factory=list,
+        description=(
+            "extraction files excluded because they are about another gameweek. Recorded "
+            "because a stale creator vote is invisible otherwise: such a creator was never "
+            "selected for extraction, so they appear in no match-quality report either."
+        ),
+    )
     superseded_inputs: list[ExtractionInput] = Field(
         default_factory=list,
         description=(
@@ -453,11 +470,51 @@ def _list_extraction_files(directory: Path) -> list[Path]:
     return sorted(directory.glob("*.json"))
 
 
-def _load_extractions(directory: Path) -> list[tuple[Path, bytes, ResolvedExtraction]]:
-    """Load + parse every extraction file. A file that fails to parse is
-    skipped with a warning rather than aborting the whole run — consistent
-    with `run_extract.py`'s own per-item-non-fatal philosophy."""
+class NoConsensusEvidenceError(RuntimeError):
+    """Raised when a run would solve on zero creator picks.
+
+    The solver's objective is `price + band_score`. With no picks every
+    band_score is zero, so it degenerates to "spend £100m" and still
+    returns a perfectly legal, confident-looking 15 — with no captain,
+    because nobody voted for one. That output is indistinguishable from a
+    real recommendation to anyone reading squad.json, and it is pure
+    noise. Refusing is the only safe behaviour: an empty answer the user
+    can see is worth far more than a fabricated one they can't detect.
+
+    Reached when extraction produced nothing, when every stored extraction
+    belongs to another gameweek, or when name resolution dropped every
+    pick."""
+
+
+def _load_extractions(
+    directory: Path, gameweek: int | None = None
+) -> tuple[list[tuple[Path, bytes, ResolvedExtraction]], list[tuple[Path, int | None]]]:
+    """Load + parse every extraction file, keeping only those that are
+    about `gameweek`. Returns `(loaded, wrong_gameweek)`.
+
+    THE GAMEWEEK FILTER IS NOT OPTIONAL HYGIENE. `data/extractions/` is
+    append-only and keyed by video_id, and `_latest_per_creator` dedupes
+    only by publish date — it has no notion of which gameweek a pick was
+    about. So a creator who posted a GW1 team but no GW2 video keeps
+    voting, with last week's squad, forever. On the GW2 run that was two
+    real creators (fpl-family, fpl-hints) casting stale GW1 votes into the
+    GW2 consensus, silently: they were never *selected* for extraction, so
+    they never appeared in the match-quality report either.
+
+    `gameweek=None` disables the filter (every stored extraction loads),
+    which is the old behaviour and is what tests and ad-hoc re-solves of a
+    historical run want.
+
+    An extraction whose own `gameweek` is None — the model could not tell —
+    is KEPT rather than dropped: absence of evidence isn't evidence of the
+    wrong gameweek, and `render_match_quality` already flags those for a
+    human. Only an explicit mismatch is excluded.
+
+    A file that fails to parse is skipped with a warning rather than
+    aborting the whole run — consistent with `run_extract.py`'s own
+    per-item-non-fatal philosophy."""
     loaded: list[tuple[Path, bytes, ResolvedExtraction]] = []
+    wrong_gameweek: list[tuple[Path, int | None]] = []
     for path in _list_extraction_files(directory):
         raw = path.read_bytes()
         try:
@@ -465,8 +522,19 @@ def _load_extractions(directory: Path) -> list[tuple[Path, bytes, ResolvedExtrac
         except ValidationError as e:
             logger.warning("pipeline: skipping unparseable extraction file %s: %s", path, e)
             continue
+        found = resolved.extraction.gameweek
+        if gameweek is not None and found is not None and found != gameweek:
+            logger.warning(
+                "pipeline: EXCLUDING %s (%s) — it is a GW%s extraction, this run is GW%s",
+                path.name,
+                resolved.extraction.creator_id,
+                found,
+                gameweek,
+            )
+            wrong_gameweek.append((path, found))
+            continue
         loaded.append((path, raw, resolved))
-    return loaded
+    return loaded, wrong_gameweek
 
 
 def _latest_per_creator(
@@ -632,11 +700,28 @@ def fetch_my_squad_summary(player_db: PlayerDB) -> tuple[MySquadSummary | None, 
         entry_id = get_entry_id()
     except EntryIdNotConfiguredError:
         return None, "FPL_ENTRY_ID not configured — my-squad section skipped"
+    except ValueError as e:
+        # get_entry_id also raises a bare ValueError for a non-integer id.
+        # This block sits outside the broad guard below, so without this
+        # clause a typo'd FPL_ENTRY_ID escapes a function whose docstring
+        # promises it never raises.
+        return None, f"FPL_ENTRY_ID is malformed ({e}) — my-squad section skipped"
 
     try:
         gameweek = fpl_client.get_current_completed_gameweek()
         if gameweek is None:
             return None, "no gameweek has completed yet — my-squad section skipped"
+
+        # Distinguish "wrong id" from "right id, picks not public yet".
+        # fetch_my_squad tries picks first and falls back to a placeholder
+        # team name, so a typo'd id produced "picks aren't public yet" —
+        # sending the owner off to wait for a deadline instead of fixing
+        # their .env.
+        if fpl_client.get_entry(entry_id) is None:
+            return (
+                None,
+                f"FPL_ENTRY_ID={entry_id} does not match any FPL manager — check .env",
+            )
 
         squad = fetch_my_squad(entry_id, gameweek, player_db)
         if squad is None:
@@ -763,6 +848,8 @@ def run_pipeline(
     nuance_fn: NuanceFn | None = None,
     report_fn: ReportFn | None = None,
     my_squad_fn: MySquadFn | None = None,
+    gameweek: int | None = None,
+    allow_no_evidence: bool = False,
 ) -> PipelineResult:
     """Run the full stored-extractions -> solved-squad -> report pipeline
     and write an immutable run record. `player_db`/`registry` are
@@ -820,9 +907,16 @@ def run_pipeline(
     bootstrap_fetched_at = None if player_db is not None else _bootstrap_fetched_at()
     creators = registry if registry is not None else REGISTRY
 
-    all_loaded = _load_extractions(extractions_dir)
+    all_loaded, wrong_gameweek = _load_extractions(extractions_dir, gameweek)
     loaded, superseded = _latest_per_creator(all_loaded)
     picks_by_creator, picks_used, picks_skipped = _build_picks(loaded)
+    if picks_used == 0 and not allow_no_evidence:
+        raise NoConsensusEvidenceError(
+            f"no usable creator picks for GW{gameweek}: {len(all_loaded)} extraction "
+            f"file(s) parsed, {len(wrong_gameweek)} excluded as another gameweek's, "
+            f"{picks_skipped} pick(s) dropped in name resolution. Refusing to solve — "
+            f"the result would be a price-anchored squad with no creator support behind it."
+        )
     creator_weights = _creator_weights(creators)
 
     availability = filter_squad_candidates(db.all_players(), min_multiplier=0.0)
@@ -869,6 +963,8 @@ def run_pipeline(
         bootstrap_fetched_at=bootstrap_fetched_at,
         git=git,
         inputs=[_extraction_input(path, raw, resolved) for path, raw, resolved in loaded],
+        gameweek=gameweek,
+        excluded_wrong_gameweek=[f"{path.name} (GW{found})" for path, found in wrong_gameweek],
         superseded_inputs=[
             _extraction_input(path, raw, resolved) for path, raw, resolved in superseded
         ],
@@ -969,6 +1065,16 @@ def main(argv: list[str] | None = None) -> int:
             "(use on deadline morning; free, no LLM cost)"
         ),
     )
+    parser.add_argument(
+        "--gameweek",
+        type=int,
+        default=None,
+        help=(
+            "gameweek to solve for; extractions about another gameweek are excluded from "
+            "the vote. Defaults to the FPL API's next event. Pass explicitly when running "
+            "AFTER a deadline has passed, since `is_next` will have rolled on by then."
+        ),
+    )
     args = parser.parse_args(argv)
 
     configure_logging()
@@ -982,11 +1088,27 @@ def main(argv: list[str] | None = None) -> int:
     # Unlike nuance, my-squad has no flag: it's free (no LLM call), so a
     # real CLI run always attempts it — see run_pipeline's docstring for
     # why `run_pipeline()` itself defaults this to off (test isolation).
-    result = run_pipeline(
-        force_refresh=args.force_refresh,
-        nuance_fn=nuance_fn,
-        my_squad_fn=fetch_my_squad_summary,
-    )
+    gameweek = args.gameweek
+    if gameweek is None:
+        gameweek = fpl_client.get_next_gameweek()
+        logger.info("pipeline: solving for GW%s (from the FPL API's next event)", gameweek)
+
+    try:
+        result = run_pipeline(
+            force_refresh=args.force_refresh,
+            nuance_fn=nuance_fn,
+            my_squad_fn=fetch_my_squad_summary,
+            gameweek=gameweek,
+        )
+    except NoConsensusEvidenceError as e:
+        print(f"\nREFUSING TO SOLVE: {e}", file=sys.stderr)
+        print(
+            "Run the extraction stage first "
+            f"(uv run python -m fpl_oracle.extract.run_extract --gameweek {gameweek}), "
+            "or pass an explicit --gameweek if you meant a different one.",
+            file=sys.stderr,
+        )
+        return 1
     record, squad, run_dir = result.record, result.squad, result.run_dir
 
     # Deliberately NOT force_refresh: this only resolves ids to names for

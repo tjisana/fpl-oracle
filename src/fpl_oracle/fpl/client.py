@@ -255,6 +255,22 @@ def get_bootstrap_static(force_refresh: bool = False) -> dict:
     return data
 
 
+def get_next_gameweek() -> int | None:
+    """The gameweek whose deadline is next, per `bootstrap-static`'s
+    `events` array — i.e. the one a squad is being picked FOR.
+
+    NOTE THE ROLLOVER: `is_next` flips to GW(N+1) the instant GW N's
+    deadline passes. A run started after the deadline therefore targets
+    the following gameweek, which is correct for planning and wrong for
+    "what did I just submit". Callers that mean a specific gameweek should
+    pass it explicitly rather than rely on this."""
+    data = get_bootstrap_static()
+    for event in data.get("events", []):
+        if event.get("is_next"):
+            return event["id"]
+    return None
+
+
 def get_current_completed_gameweek() -> int | None:
     """The most recently FINISHED gameweek, per `bootstrap-static`'s
     `events` array (each event carries `id`, `finished`, `is_current`,

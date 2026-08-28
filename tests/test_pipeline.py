@@ -22,6 +22,7 @@ from fpl_oracle.extract.run_extract import ResolvedExtraction
 from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
 from fpl_oracle.fpl.players import Player, PlayerDB, Position
 from fpl_oracle.pipeline import (
+    NoConsensusEvidenceError,
     PipelineResult,
     diff_vs_previous,
     load_previous_run,
@@ -116,13 +117,14 @@ def _write_extraction(
     video_id: str,
     picks: list[Pick],
     published_at: datetime = datetime(2026, 8, 1, tzinfo=UTC),
+    gameweek: int | None = 1,
 ) -> Path:
     extraction = VideoExtraction(
         creator_id=creator_id,
         video_id=video_id,
         video_title="Test video",
         published_at=published_at,
-        gameweek=1,
+        gameweek=gameweek,
         picks=picks,
     )
     resolved = ResolvedExtraction(extraction=extraction, resolutions=[])
@@ -166,6 +168,9 @@ class TestSupersededExtractions:
             player_db=_make_db(_legal_pool()),
             registry=[_creator("andy")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
 
         # Only the newer video's single pick counts; players 2 and 3, dropped
@@ -189,6 +194,9 @@ class TestSupersededExtractions:
             player_db=_make_db(_legal_pool()),
             registry=[_creator("andy")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
 
         assert [i.video_id for i in result.record.superseded_inputs] == ["old_video"]
@@ -207,6 +215,9 @@ class TestSupersededExtractions:
             player_db=_make_db(_legal_pool()),
             registry=[_creator("andy"), _creator("focal")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
 
         assert result.record.counts.extractions_loaded == 2
@@ -223,6 +234,9 @@ class TestRunIdentity:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         result2 = run_pipeline(
             extractions_dir=tmp_path / "missing",
@@ -230,6 +244,9 @@ class TestRunIdentity:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record1, dir1 = result1.record, result1.run_dir
         record2, dir2 = result2.record, result2.run_dir
@@ -257,6 +274,9 @@ class TestInputProvenance:
             player_db=db,
             registry=[_creator("alice")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record = result.record
         assert len(record.inputs) == 1
@@ -283,6 +303,9 @@ class TestPickResolution:
             player_db=db,
             registry=[_creator("alice")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record = result.record
         assert record.counts.picks_used == 1
@@ -315,6 +338,9 @@ class TestAvailabilityVeto:
             player_db=db,
             registry=[_creator("alice"), _creator("bob")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record, squad = result.record, result.squad
 
@@ -348,6 +374,9 @@ class TestCaptaincyRelaxation:
             player_db=db,
             registry=[_creator("alice"), _creator("bob")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record, squad = result.record, result.squad
 
@@ -365,6 +394,9 @@ class TestGracefulEmptyInputs:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record, squad = result.record, result.squad
         assert record.counts.extractions_loaded == 0
@@ -382,6 +414,9 @@ class TestGracefulEmptyInputs:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         record, squad = result.record, result.squad
         assert record.counts.extractions_loaded == 0
@@ -406,6 +441,9 @@ class TestPipelineResultShape:
             player_db=db,
             registry=[_creator("alice")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
 
         assert isinstance(result, PipelineResult)
@@ -426,6 +464,9 @@ class TestNuanceSeam:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             nuance_fn=None,
         )
         assert not (result.run_dir / "nuance.json").exists()
@@ -456,6 +497,7 @@ class TestNuanceSeam:
             registry=[_creator("andy")],
             report_fn=report_fn,
             nuance_fn=fake_nuance_fn,
+            allow_no_evidence=True,
         )
 
         # Display names reach the nuance pass: the model must EMIT creator
@@ -493,6 +535,7 @@ class TestNuanceSeam:
             registry=[],
             report_fn=report_fn,
             nuance_fn=failing_nuance_fn,
+            allow_no_evidence=True,
         )
 
         assert result.report_path is not None
@@ -520,6 +563,9 @@ class TestForceRefreshSeam:
             runs_dir=tmp_path / "runs",
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             force_refresh=True,
         )
 
@@ -540,6 +586,9 @@ class TestForceRefreshSeam:
             runs_dir=tmp_path / "runs",
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
 
         assert captured["force_refresh"] is False
@@ -558,6 +607,9 @@ class TestForceRefreshSeam:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             force_refresh=True,
         )
 
@@ -582,6 +634,9 @@ class TestBootstrapFetchedAt:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         assert result.record.bootstrap_fetched_at is None
 
@@ -696,6 +751,9 @@ class TestMySquadWiring:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
 
         assert result.record.my_squad is None
@@ -715,6 +773,9 @@ class TestMySquadWiring:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             my_squad_fn=fake_my_squad_fn,
         )
 
@@ -744,6 +805,9 @@ class TestMySquadWiring:
             player_db=_make_db(_legal_pool()),
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             my_squad_fn=fake_my_squad_fn,
         )
 
@@ -763,6 +827,9 @@ class TestMySquadWiring:
             player_db=_make_db(_legal_pool()),
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             my_squad_fn=failing_my_squad_fn,
         )
 
@@ -786,6 +853,9 @@ class TestMySquadWiring:
             player_db=db,
             registry=[_creator("andy")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         with_my_squad = run_pipeline(
             extractions_dir=extractions,
@@ -793,6 +863,9 @@ class TestMySquadWiring:
             player_db=db,
             registry=[_creator("andy")],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
             my_squad_fn=lambda player_db: (_fake_my_squad_summary(), "fetched squad for GW1"),
         )
 
@@ -811,6 +884,9 @@ class TestPipelineResultDiffAndAvailability:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         assert result.diff.previous_run_id is None
         assert set(result.diff.players_in) == {p.player_id for p in result.squad.players}
@@ -829,6 +905,9 @@ class TestPipelineResultDiffAndAvailability:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         second = run_pipeline(
             extractions_dir=tmp_path / "missing",
@@ -836,6 +915,9 @@ class TestPipelineResultDiffAndAvailability:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         assert second.diff.previous_run_id == first.record.run_id
         assert second.diff.new_captain == second.record.solver.captain
@@ -849,6 +931,9 @@ class TestPipelineResultDiffAndAvailability:
             player_db=db,
             registry=[],
             report_fn=_fake_report_fn,
+            # These fixtures solve on an empty extractions dir on purpose —
+            # they exercise diff/availability/my-squad plumbing, not consensus.
+            allow_no_evidence=True,
         )
         assert set(result.availability) == {p.player_id for p in pool}
 
@@ -865,6 +950,7 @@ class TestPipelineResultDiffAndAvailability:
             runs_dir=tmp_path / "runs",
             player_db=db,
             registry=[],
+            allow_no_evidence=True,
             report_fn=report_fn,
         )
 
@@ -963,3 +1049,129 @@ class TestDiffVsPrevious:
         diff = diff_vs_previous(previous, {1, 2, 3}, 1)
 
         assert diff.captain_changed is False
+
+
+class TestNoConsensusEvidenceGuard:
+    """A solve with zero picks degenerates to 'spend £100m': the objective
+    is price + band_score, and with no votes every band_score is 0. It
+    returns a legal, confident-looking 15 with no captain — indistinguishable
+    from a real recommendation in squad.json. Observed for real: a GW2 run
+    against 16 GW1-only extractions produced a full 3-5-2 on zero evidence."""
+
+    def test_zero_picks_refuses_to_solve(self, tmp_path: Path) -> None:
+        db = _make_db(_legal_pool())
+        with pytest.raises(NoConsensusEvidenceError) as excinfo:
+            run_pipeline(
+                extractions_dir=tmp_path / "missing",
+                runs_dir=tmp_path / "runs",
+                player_db=db,
+                registry=[],
+                report_fn=_fake_report_fn,
+            )
+        assert "Refusing to solve" in str(excinfo.value)
+
+    def test_no_run_directory_is_written_when_refusing(self, tmp_path: Path) -> None:
+        """A refused run must leave no artefact that could later be mistaken
+        for a real recommendation."""
+        db = _make_db(_legal_pool())
+        runs = tmp_path / "runs"
+        with pytest.raises(NoConsensusEvidenceError):
+            run_pipeline(
+                extractions_dir=tmp_path / "missing",
+                runs_dir=runs,
+                player_db=db,
+                registry=[],
+                report_fn=_fake_report_fn,
+            )
+        assert not runs.exists() or list(runs.glob("*/squad.json")) == []
+
+    def test_explicit_opt_out_still_solves(self, tmp_path: Path) -> None:
+        db = _make_db(_legal_pool())
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[],
+            report_fn=_fake_report_fn,
+            allow_no_evidence=True,
+        )
+        assert len(result.squad.players) == 15
+
+
+class TestStaleGameweekExtractionsAreExcluded:
+    """`data/extractions/` is append-only and `_latest_per_creator` dedupes
+    only by publish date — it has no idea which gameweek a pick was about.
+    So a creator who posted a GW1 team but no GW2 video keeps voting, with
+    last week's squad, forever. Found for real on the GW2 run: fpl-family
+    and fpl-hints had GW1 extractions on disk and no GW2 video, and would
+    have cast stale votes into the GW2 consensus — invisibly, since they
+    were never selected for extraction and so appear in no match-quality
+    report."""
+
+    def test_other_gameweeks_do_not_vote(self, tmp_path: Path) -> None:
+        pool = _legal_pool()
+        db = _make_db(pool)
+        extractions = tmp_path / "extractions"
+        extractions.mkdir()
+        _write_extraction(
+            extractions, "stale-creator", "v_gw1", [_pick(pool[0].player_id)], gameweek=1
+        )
+        _write_extraction(
+            extractions, "current-creator", "v_gw2", [_pick(pool[1].player_id)], gameweek=2
+        )
+
+        result = run_pipeline(
+            extractions_dir=extractions,
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[_creator("current-creator"), _creator("stale-creator")],
+            report_fn=_fake_report_fn,
+            gameweek=2,
+        )
+
+        assert result.record.counts.extractions_loaded == 1
+        assert result.record.gameweek == 2
+        assert any("GW1" in e for e in result.record.excluded_wrong_gameweek)
+
+    def test_no_gameweek_filter_loads_everything(self, tmp_path: Path) -> None:
+        """`gameweek=None` is the historical behaviour, kept for re-solving
+        a past run."""
+        pool = _legal_pool()
+        db = _make_db(pool)
+        extractions = tmp_path / "extractions"
+        extractions.mkdir()
+        _write_extraction(extractions, "a", "v1", [_pick(pool[0].player_id)], gameweek=1)
+        _write_extraction(extractions, "b", "v2", [_pick(pool[1].player_id)], gameweek=2)
+
+        result = run_pipeline(
+            extractions_dir=extractions,
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[_creator("a"), _creator("b")],
+            report_fn=_fake_report_fn,
+        )
+
+        assert result.record.counts.extractions_loaded == 2
+        assert result.record.excluded_wrong_gameweek == []
+
+    def test_unknown_gameweek_is_kept_not_dropped(self, tmp_path: Path) -> None:
+        """The model couldn't tell which gameweek a video was about.
+        Absence of evidence isn't evidence of the wrong gameweek — and
+        render_match_quality already flags these for a human."""
+        pool = _legal_pool()
+        db = _make_db(pool)
+        extractions = tmp_path / "extractions"
+        extractions.mkdir()
+        _write_extraction(extractions, "a", "v1", [_pick(pool[0].player_id)], gameweek=None)
+
+        result = run_pipeline(
+            extractions_dir=extractions,
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[_creator("a")],
+            report_fn=_fake_report_fn,
+            gameweek=2,
+        )
+
+        assert result.record.counts.extractions_loaded == 1
+        assert result.record.excluded_wrong_gameweek == []

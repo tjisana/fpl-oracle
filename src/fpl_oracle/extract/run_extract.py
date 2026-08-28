@@ -27,12 +27,13 @@ See `is_gameweek_video`'s docstring for the exact rule.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 
 import anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from fpl_oracle.extract.extractor import ExtractionError, extract_picks
 from fpl_oracle.extract.schemas import VideoExtraction
@@ -81,7 +82,14 @@ GENERIC_IN_SEASON_PATTERNS = (
 # Used to find OTHER gameweek numbers a title mentions (see
 # `is_gameweek_video`), independent of the target gameweek.
 _EXPLICIT_GW_NUMBER_RE = re.compile(
-    r"\bgw ?(\d{1,2})\b|\bgameweek (\d{1,2})\b|\bgame week (\d{1,2})\b"
+    # The optional leading letter catches BGW/DGW (blank and double
+    # gameweeks). Without it `\bgw` cannot match inside "bgw3"/"dgw29" —
+    # there is no word boundary between the b/d and the g — so a "BGW3
+    # Team Selection" title mentioned no gameweek as far as rule 2 was
+    # concerned, and the generic "team selection" pattern then accepted it
+    # as THIS gameweek's video. Harmless in August, guaranteed to bite from
+    # ~GW18 when BGW/DGW titling starts.
+    r"\b[a-z]?gw ?(\d{1,2})\b|\bgameweek (\d{1,2})\b|\bgame week (\d{1,2})\b"
 )
 
 
@@ -460,8 +468,27 @@ def run_extraction(
                 continue
 
             extraction_path = output_dir / f"{video.video_id}.json"
+            reused: ResolvedExtraction | None = None
             if extraction_path.exists() and not force:
-                r = ResolvedExtraction.model_validate_json(extraction_path.read_text())
+                # A truncated or corrupt file here must NOT abort the run.
+                # This read sits outside the extraction try/except below, so
+                # an uncaught ValidationError escapes run_extraction entirely
+                # and `deadline.py` reports STAGE FAILED — losing every
+                # creator not yet processed, and doing it again on every
+                # retry until a human deletes the file. Writes are not
+                # atomic, so a Ctrl-C or a sleeping laptop mid-run produces
+                # exactly this. Treat it as a cache miss and re-extract.
+                try:
+                    reused = ResolvedExtraction.model_validate_json(extraction_path.read_text())
+                except (ValidationError, OSError) as e:
+                    logger.warning(
+                        "run_extract: %s — cached extraction %s is unreadable (%s); re-extracting",
+                        creator.creator_id,
+                        extraction_path.name,
+                        type(e).__name__,
+                    )
+            if reused is not None:
+                r = reused
                 skipped.append(creator.creator_id)
                 logger.info(
                     "run_extract: %s — SKIPPED (existing extraction for %s reused; "
@@ -491,7 +518,12 @@ def run_extraction(
                 failures.append((creator.creator_id, str(e)))
                 continue
             r = resolve_extraction(extraction, db)
-            extraction_path.write_text(r.model_dump_json(indent=2))
+            # Atomic: this file is what the skip-if-recent guard trusts and
+            # what the pipeline votes on. A half-written one is a paid call
+            # turned into a landmine.
+            tmp_path = extraction_path.with_suffix(".json.tmp")
+            tmp_path.write_text(r.model_dump_json(indent=2))
+            os.replace(tmp_path, extraction_path)
             logger.info(
                 "run_extract: %s — %d picks (%d matched) from %r",
                 creator.creator_id,

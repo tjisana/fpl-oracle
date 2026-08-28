@@ -94,6 +94,15 @@ def write_snapshot(
         PlayerPriceSnapshot(player_id=e["id"], now_cost=e["now_cost"])
         for e in data.get("elements", [])
     ]
+    if not prices:
+        # Idempotency is per-date, so an empty snapshot would be frozen in
+        # for the rest of the UTC day and quietly poison the price history
+        # this module exists to build. A 200 with no `elements` is not a
+        # valid day's prices; refuse rather than record it.
+        raise ValueError(
+            "bootstrap-static returned no players — refusing to write an empty price "
+            "snapshot, which would occupy today's date and block a real one"
+        )
     snapshot = PriceSnapshot(taken_at=now, snapshot_date=today, prices=prices)
     path.write_text(snapshot.model_dump_json(indent=2))
     logger.info("snapshot: wrote %s (%d players)", path, len(prices))

@@ -9,10 +9,11 @@ checks the on-disk copy before hitting the network.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from youtube_transcript_api import (
     CouldNotRetrieveTranscript,
     NoTranscriptFound,
@@ -109,14 +110,32 @@ def fetch_transcript(video_id: str, dir: Path = DEFAULT_TRANSCRIPT_DIR) -> Trans
 
 
 def save_transcript(t: Transcript, dir: Path = DEFAULT_TRANSCRIPT_DIR) -> Path:
+    """Write atomically: a transcript is the cache, and a half-written one
+    is worse than a missing one — `load_transcript` would raise on the
+    truncated JSON and take down both the warmer and the extractor rather
+    than simply refetching. Killing a long harvest partway through is a
+    routine event (it has happened), so tmp-then-rename is not paranoia."""
     dir.mkdir(parents=True, exist_ok=True)
     path = dir / f"{t.video_id}.json"
-    path.write_text(t.model_dump_json(indent=2))
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(t.model_dump_json(indent=2))
+    os.replace(tmp, path)
     return path
 
 
 def load_transcript(video_id: str, dir: Path = DEFAULT_TRANSCRIPT_DIR) -> Transcript | None:
+    """Return the stored transcript, or None if there isn't a usable one.
+
+    A corrupt file counts as absent: it is a cache, so the right response
+    is to refetch, not to crash a deadline-morning run."""
     path = dir / f"{video_id}.json"
     if not path.exists():
         return None
-    return Transcript.model_validate_json(path.read_text())
+    try:
+        return Transcript.model_validate_json(path.read_text())
+    except (ValidationError, ValueError, OSError) as e:
+        print(
+            f"transcripts: discarding unreadable cached transcript {path} ({type(e).__name__})",
+            file=sys.stderr,
+        )
+        return None
