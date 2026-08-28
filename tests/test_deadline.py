@@ -111,6 +111,7 @@ def _patch_happy_path(monkeypatch, tmp_path: Path, captured: dict | None = None)
         return _fake_result()
 
     monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+    monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
     monkeypatch.setattr(
         deadline,
         "run_extraction",
@@ -178,6 +179,7 @@ class TestDryRun:
 class TestStageSkipping:
     def test_skip_ingest_never_calls_ingest(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.setattr(deadline, "ingest_main", _raiser(AssertionError("ingest called")))
+        monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
         monkeypatch.setattr(
             deadline, "run_extraction", lambda *a, **k: _fake_extract_summary(tmp_path / "mq.md")
         )
@@ -346,6 +348,7 @@ class TestStageFailures:
         assert "run-new" in err
 
     def test_extract_failure_exits_nonzero_and_prints_resume(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
         monkeypatch.setattr(deadline, "run_extraction", _raiser(RuntimeError("claude API down")))
         monkeypatch.setattr(
             deadline, "run_pipeline", _raiser(AssertionError("must not run — extract failed"))
@@ -384,6 +387,7 @@ class TestStageFailures:
         marker.write_text("{}")
 
         monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+        monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
         monkeypatch.setattr(
             deadline,
             "run_extraction",
@@ -458,6 +462,7 @@ class TestFinalSummaryReadsResultDiff:
             captured["diff"] = diff
 
         monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+        monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
         monkeypatch.setattr(
             deadline, "run_extraction", lambda *a, **k: _fake_extract_summary(tmp_path / "mq.md")
         )

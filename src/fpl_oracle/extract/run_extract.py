@@ -1,5 +1,6 @@
-"""GW1 extraction runner: find each creator's team-reveal video, extract
-picks with Claude, and resolve every name against the FPL player DB.
+"""Gameweek-agnostic extraction runner: find each creator's team video for
+a TARGET gameweek, extract picks with Claude, and resolve every name
+against the FPL player DB.
 
 Per the project's hard rule, an extracted pick never keeps a bare
 unresolved name: MATCHED picks get their `player_id` stamped; UNMATCHED /
@@ -9,11 +10,25 @@ surfaced in the match-quality report
 (`data/extractions/match_quality.md`) — the artifact the PLAN.md "review
 match quality" step reads. Nothing unresolved flows further downstream;
 consensus (Phase 3) consumes only MATCHED picks.
+
+VIDEO SELECTION, GW1 vs. IN-SEASON: GW1 content was reliably titled "GW1
+TEAM" — an explicit gameweek number in the title. In-season content often
+drops the number ("Final Thoughts", "Team News", "My Team"), which is
+dangerous to match on title alone: it would happily pick up LAST
+gameweek's video too. So `is_gameweek_video` treats an explicit
+"gw{N}"/"gameweek {N}"/"game week {N}" match for the TARGET gameweek as
+an unconditional signal, but only accepts a GENERIC pattern (no gameweek
+number) when the video was published at or after the previous gameweek's
+deadline (`published_after`) — and rejects outright anything carrying an
+explicit number for a DIFFERENT gameweek, even alongside a generic match.
+See `is_gameweek_video`'s docstring for the exact rule.
 """
 
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
@@ -43,43 +58,154 @@ logger = logging.getLogger(__name__)
 DEFAULT_OUTPUT_DIR = Path("data/extractions")
 VIDEOS_PER_CHANNEL = 10
 
-# Recall-leaning by design: extracting from a non-team video just yields
-# fewer picks; missing a creator's actual reveal loses their GW1 vote.
-GW1_TITLE_PATTERNS = (
-    "gw1",
-    "gw 1",
-    "gameweek 1",
-    "team reveal",
+# In-season titles that carry no explicit gameweek number. Dangerous on
+# their own (could be LAST gameweek's video) — see `is_gameweek_video`,
+# which only accepts these inside the `published_after` window. Kept as a
+# module-level constant so it's reviewable/tunable on its own.
+#
+# "draft" is deliberately absent: FPL Draft is a different game mode whose
+# picks would poison classic-mode consensus.
+GENERIC_IN_SEASON_PATTERNS = (
+    "final thoughts",
+    "team news",
+    "transfer",
     "my team",
-    "team selection",
-    "final team",
-    # Titles often wedge "fpl" between the words ("FPL Salah's FINAL FPL
-    # Team") — caught live on the FFH personas, whose reveals this style
-    # of title would otherwise hide from the substring patterns above.
-    "final fpl team",
-    "my fpl team",
-    "fpl team reveal",
     "wildcard",
-    # "draft" is deliberately absent: FPL Draft is a different game mode
-    # whose picks would poison classic-mode consensus, and GW1 reveal
-    # titles overwhelmingly carry a gw1/team pattern anyway.
+    "team reveal",
+    "team selection",
 )
-# Guard against matching later gameweeks: "gw1" must not be "gw10"-"gw19" etc.
-_GW1_FALSE_STEMS = (
-    tuple(f"gw1{d}" for d in "0123456789")
-    + tuple(f"gw 1{d}" for d in "0123456789")
-    + tuple(f"gameweek 1{d}" for d in "0123456789")
+
+# Explicit gameweek-number mentions in a title, any of the four styles the
+# patterns below produce ("gw2", "gw 2", "gameweek 2", "game week 2").
+# Used to find OTHER gameweek numbers a title mentions (see
+# `is_gameweek_video`), independent of the target gameweek.
+_EXPLICIT_GW_NUMBER_RE = re.compile(
+    r"\bgw ?(\d{1,2})\b|\bgameweek (\d{1,2})\b|\bgame week (\d{1,2})\b"
 )
 
 
-def is_gw1_team_video(title: str) -> bool:
+def gameweek_title_patterns(gw: int) -> tuple[str, ...]:
+    """The explicit-number title patterns for gameweek `gw`, e.g.
+    `gameweek_title_patterns(2) == ("gw2", "gw 2", "gameweek 2", "game week 2")`.
+    """
+    return (f"gw{gw}", f"gw {gw}", f"gameweek {gw}", f"game week {gw}")
+
+
+def _gameweek_false_stems(gw: int) -> tuple[str, ...]:
+    """Guard against a single-digit target matching inside a two-digit
+    gameweek that starts with the same digit: "gw2" must not match "gw20"
+    through "gw29" (etc. for the other three pattern prefixes). Built for
+    every pattern prefix x every trailing digit 0-9. For `gw >= 10` there's
+    no such collision (no three-digit gameweek exists in a 38-gameweek
+    season), so the stem tuple is empty."""
+    if gw >= 10:
+        return ()
+    prefixes = (f"gw{gw}", f"gw {gw}", f"gameweek {gw}", f"game week {gw}")
+    return tuple(f"{prefix}{d}" for prefix in prefixes for d in "0123456789")
+
+
+def _matches_explicit_gameweek(title: str, gw: int) -> bool:
     lowered = title.lower()
-    # Strip gw10-gw19-style stems first, then check ALL patterns against
-    # the stripped title: "GW1 TEAM + GW17 PLANS" must still match via its
-    # genuine "gw1", which survives the stripping ("gw17" does not).
-    for stem in _GW1_FALSE_STEMS:
+    # Strip gw20-gw29-style stems (for single-digit gw) first, then check
+    # ALL patterns against the stripped title: "GW2 TEAM + GW20 PLANS"
+    # must still match via its genuine "gw2", which survives the
+    # stripping ("gw20" does not).
+    for stem in _gameweek_false_stems(gw):
         lowered = lowered.replace(stem, " ")
-    return any(p in lowered for p in GW1_TITLE_PATTERNS)
+    return any(p in lowered for p in gameweek_title_patterns(gw))
+
+
+def _explicit_gameweek_numbers(title: str) -> set[int]:
+    """Every gameweek number explicitly mentioned in `title`, via any of
+    the "gw{N}" / "gw {N}" / "gameweek {N}" / "game week {N}" forms."""
+    lowered = title.lower()
+    numbers: set[int] = set()
+    for m in _EXPLICIT_GW_NUMBER_RE.finditer(lowered):
+        numbers.add(int(m.group(1) or m.group(2) or m.group(3)))
+    return numbers
+
+
+def _matches_generic_pattern(title: str) -> bool:
+    lowered = title.lower()
+    return any(p in lowered for p in GENERIC_IN_SEASON_PATTERNS)
+
+
+def is_gameweek_video(
+    title: str,
+    gameweek: int,
+    *,
+    published_at: datetime | None = None,
+    published_after: datetime | None = None,
+) -> bool:
+    """True iff `title` should be treated as `gameweek`'s team/pick video.
+
+    1. An explicit "gw{N}"/"gameweek {N}"/"game week {N}" pattern for
+       THIS gameweek matches unconditionally — the strong signal.
+    2. Otherwise, an explicit gameweek number for a DIFFERENT gameweek is
+       rejected outright, even if the title also carries a generic
+       pattern — it's unambiguously about some other week.
+    3. Otherwise, a GENERIC in-season pattern (no gameweek number at all,
+       see `GENERIC_IN_SEASON_PATTERNS`) matches only if `published_at` is
+       at or after `published_after` (the previous gameweek's deadline) —
+       outside that window it's most likely last gameweek's video, not
+       this one. `published_after` of `None` (gameweek 1: no previous
+       deadline) imposes no lower bound, so a generic match is accepted
+       unconditionally in that case.
+    """
+    if _matches_explicit_gameweek(title, gameweek):
+        return True
+    if _explicit_gameweek_numbers(title) - {gameweek}:
+        return False
+    if not _matches_generic_pattern(title):
+        return False
+    if published_after is None:
+        return True
+    return published_at is not None and published_at >= published_after
+
+
+def _resolve_gameweek_and_window(
+    events: list[dict], gameweek: int | None
+) -> tuple[int, datetime | None]:
+    """Pure resolution logic over a bootstrap-static `events` payload —
+    split out from `resolve_target_gameweek` so it's unit-testable with a
+    fake events list, no network.
+
+    `gameweek=None` resolves to the event with `is_next` true. The
+    returned `published_after` is the PREVIOUS event's `deadline_time`
+    (`None` for gameweek 1, or if that event/its deadline is missing)."""
+    if gameweek is None:
+        next_ids = [e["id"] for e in events if e.get("is_next")]
+        if not next_ids:
+            raise ValueError(
+                "FPL bootstrap-static has no event marked is_next — season may be "
+                "over, or the payload is malformed"
+            )
+        gameweek = next_ids[0]
+
+    if gameweek <= 1:
+        return gameweek, None
+
+    previous = next((e for e in events if e.get("id") == gameweek - 1), None)
+    deadline_str = previous.get("deadline_time") if previous else None
+    if deadline_str is None:
+        return gameweek, None
+    # bootstrap-static's deadline_time is ISO-8601 UTC ("...Z") —
+    # fromisoformat parses the trailing Z into an aware datetime (3.11+),
+    # which is what `is_gameweek_video` compares `published_at` against.
+    # An accidental naive value here would silently crash that comparison.
+    return gameweek, datetime.fromisoformat(deadline_str)
+
+
+def resolve_target_gameweek(
+    gameweek: int | None = None, *, force_refresh: bool = False
+) -> tuple[int, datetime | None]:
+    """Resolve the target gameweek (default: the FPL API's `is_next`
+    event) and its `published_after` window (the PREVIOUS event's
+    `deadline_time`, `None` for gameweek 1)."""
+    from fpl_oracle.fpl.client import get_bootstrap_static
+
+    bootstrap = get_bootstrap_static(force_refresh=force_refresh)
+    return _resolve_gameweek_and_window(bootstrap["events"], gameweek)
 
 
 class PickResolution(BaseModel):
@@ -127,10 +253,16 @@ def resolve_extraction(extraction: VideoExtraction, db: PlayerDB) -> ResolvedExt
     )
 
 
-def pick_gw1_video(
-    creator: Creator, registry: list[Creator], force_refresh: bool = False
+def pick_gameweek_video(
+    creator: Creator,
+    registry: list[Creator],
+    gameweek: int,
+    published_after: datetime | None,
+    force_refresh: bool = False,
 ) -> VideoInfo | None:
-    """Most recent GW1-team-titled, non-Short video attributed to `creator`.
+    """Most recent `gameweek`-qualifying, non-Short video attributed to
+    `creator` — see `is_gameweek_video` for the explicit-vs-generic match
+    rule and what `published_after` gates.
 
     `force_refresh` bypasses the uploads-listing cache — see
     `list_recent_videos`. Needed on deadline morning, when the video that
@@ -151,21 +283,69 @@ def pick_gw1_video(
         logger.warning("run_extract: duration lookup failed (%s); keeping all", e)
         durations = {}
     candidates = [
-        v for v in filter_min_duration(attributed, durations) if is_gw1_team_video(v.title)
+        v
+        for v in filter_min_duration(attributed, durations)
+        if is_gameweek_video(
+            v.title, gameweek, published_at=v.published_at, published_after=published_after
+        )
     ]
     return candidates[0] if candidates else None
 
 
-def render_match_quality(resolved: list[ResolvedExtraction]) -> str:
+class VideoSelection(BaseModel):
+    """One creator's video-selection outcome for a target gameweek — the
+    shared unit between `run_extraction`'s selection phase and
+    `--dry-run`, which stops here, before any transcript fetch or Claude
+    call."""
+
+    creator: Creator
+    video: VideoInfo | None
+    error: str | None = None
+
+
+def select_videos(
+    gameweek: int,
+    published_after: datetime | None,
+    creator_ids: list[str] | None = None,
+    force_refresh: bool = False,
+) -> list[VideoSelection]:
+    """Video selection only for every eligible creator (optionally
+    narrowed to `creator_ids`) — no transcript fetch, no Claude call, no
+    money spent. Pure I/O-in-a-loop shared by `run_extraction` and
+    `--dry-run` so the dry run reflects exactly what a real run would
+    pick."""
+    creators = eligible_creators(REGISTRY)
+    if creator_ids is not None:
+        known = {c.creator_id for c in creators}
+        unknown = sorted(set(creator_ids) - known)
+        if unknown:
+            raise ValueError(f"unknown/ineligible creator id(s): {', '.join(unknown)}")
+        creators = [c for c in creators if c.creator_id in creator_ids]
+
+    selections = []
+    for creator in creators:
+        try:
+            video = pick_gameweek_video(
+                creator, REGISTRY, gameweek, published_after, force_refresh=force_refresh
+            )
+        except YouTubeApiError as e:
+            logger.warning("run_extract: %s — video listing failed: %s", creator.creator_id, e)
+            selections.append(VideoSelection(creator=creator, video=None, error=str(e)))
+            continue
+        selections.append(VideoSelection(creator=creator, video=video, error=None))
+    return selections
+
+
+def render_match_quality(resolved: list[ResolvedExtraction], gameweek: int) -> str:
     """Markdown report for the human 'review match quality' pass."""
-    lines = ["# GW1 extraction — match quality", ""]
+    lines = [f"# GW{gameweek} extraction — match quality", ""]
     total = matched = 0
     for r in resolved:
         e = r.extraction
         n_matched = sum(1 for res in r.resolutions if res.status is MatchStatus.MATCHED)
         total += len(r.resolutions)
         matched += n_matched
-        gw_flag = "" if e.gameweek in (1, None) else " — **WRONG GAMEWEEK?**"
+        gw_flag = "" if e.gameweek in (gameweek, None) else " — **WRONG GAMEWEEK?**"
         lines += [
             f"## {e.creator_id} — {e.video_title} (`{e.video_id}`)",
             "",
@@ -207,54 +387,90 @@ class ExtractionRunSummary(BaseModel):
     failures: list[tuple[str, str]] = Field(
         default_factory=list, description="(creator_id, reason) for each creator that produced none"
     )
+    skipped: list[str] = Field(
+        default_factory=list,
+        description=(
+            "creator_ids whose Claude call was SKIPPED because an extraction for the "
+            "chosen video already existed on disk (see --force). A skip counts toward "
+            "`succeeded` (a stored extraction did result), but is tracked separately here "
+            "so it's never misreported as a fresh success."
+        ),
+    )
 
     @property
     def failed(self) -> int:
         return len(self.failures)
 
+    @property
+    def skip_count(self) -> int:
+        return len(self.skipped)
+
 
 def run_extraction(
+    gameweek: int,
+    published_after: datetime | None,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     creator_ids: list[str] | None = None,
     force_refresh: bool = False,
+    force: bool = False,
 ) -> ExtractionRunSummary:
-    """Extract + resolve across all eligible creators' GW1 videos. Per-video
-    failures are non-fatal and listed in the report; the returned
-    `ExtractionRunSummary` carries the counts so a caller can tell a
-    healthy run from one where nothing worked.
+    """Extract + resolve across all eligible creators' `gameweek` videos
+    (see `is_gameweek_video` for what qualifies, gated by
+    `published_after`). Per-video failures are non-fatal and listed in the
+    report; the returned `ExtractionRunSummary` carries the counts so a
+    caller can tell a healthy run from one where nothing worked.
 
     `force_refresh` bypasses BOTH stale caches on the deadline-morning
     path: the YouTube uploads listing (so a video posted an hour ago is
-    visible) and the FPL player DB that names resolve against."""
+    visible) and the FPL player DB that names resolve against.
+
+    SKIP-IF-RECENT (the known money bug: "re-extraction re-pays for
+    creators already done"): if `data/extractions/{video_id}.json` already
+    exists for the video selection just picked, the paid Claude call is
+    SKIPPED and that existing extraction is reused — unless `force` is
+    passed, which always re-extracts. A retry after a mid-run failure must
+    not re-bill every creator that already succeeded."""
     db = PlayerDB.load(force_refresh=force_refresh)
-    creators = eligible_creators(REGISTRY)
-    if creator_ids is not None:
-        known = {c.creator_id for c in creators}
-        unknown = sorted(set(creator_ids) - known)
-        if unknown:
-            raise ValueError(f"unknown/ineligible creator id(s): {', '.join(unknown)}")
-        creators = [c for c in creators if c.creator_id in creator_ids]
+    selections = select_videos(
+        gameweek, published_after, creator_ids=creator_ids, force_refresh=force_refresh
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved: list[ResolvedExtraction] = []
     failures: list[tuple[str, str]] = []
+    skipped: list[str] = []
     report_path = output_dir / "match_quality.md"
 
     # The report is flushed in `finally`: even if a fail-fast error escapes
     # mid-run (e.g. RequestBlocked from transcript fetching, deliberately
     # environmental), completed extractions still produce the deliverable.
     try:
-        for creator in creators:
-            try:
-                video = pick_gw1_video(creator, REGISTRY, force_refresh=force_refresh)
-            except YouTubeApiError as e:
-                logger.warning("run_extract: %s — video listing failed: %s", creator.creator_id, e)
-                failures.append((creator.creator_id, f"video listing failed: {e}"))
+        for sel in selections:
+            creator = sel.creator
+            if sel.error is not None:
+                failures.append((creator.creator_id, f"video listing failed: {sel.error}"))
                 continue
+            video = sel.video
             if video is None:
-                logger.info("run_extract: %s — no GW1 team video found", creator.creator_id)
-                failures.append((creator.creator_id, "no GW1 team video found"))
+                logger.info(
+                    "run_extract: %s — no gameweek %d video found", creator.creator_id, gameweek
+                )
+                failures.append((creator.creator_id, f"no gameweek {gameweek} video found"))
                 continue
+
+            extraction_path = output_dir / f"{video.video_id}.json"
+            if extraction_path.exists() and not force:
+                r = ResolvedExtraction.model_validate_json(extraction_path.read_text())
+                skipped.append(creator.creator_id)
+                logger.info(
+                    "run_extract: %s — SKIPPED (existing extraction for %s reused; "
+                    "pass --force to re-extract)",
+                    creator.creator_id,
+                    video.video_id,
+                )
+                resolved.append(r)
+                continue
+
             transcript = fetch_transcript(video.video_id)
             if transcript is None:
                 failures.append((creator.creator_id, f"no transcript for video {video.video_id}"))
@@ -274,7 +490,7 @@ def run_extraction(
                 failures.append((creator.creator_id, str(e)))
                 continue
             r = resolve_extraction(extraction, db)
-            (output_dir / f"{video.video_id}.json").write_text(r.model_dump_json(indent=2))
+            extraction_path.write_text(r.model_dump_json(indent=2))
             logger.info(
                 "run_extract: %s — %d picks (%d matched) from %r",
                 creator.creator_id,
@@ -284,7 +500,7 @@ def run_extraction(
             )
             resolved.append(r)
     finally:
-        report = render_match_quality(resolved)
+        report = render_match_quality(resolved, gameweek)
         if failures:
             report += (
                 "\n## No extraction\n\n"
@@ -294,24 +510,67 @@ def run_extraction(
         report_path.write_text(report)
     return ExtractionRunSummary(
         report_path=report_path,
-        attempted=len(creators),
+        attempted=len(selections),
         succeeded=len(resolved),
         failures=failures,
+        skipped=skipped,
     )
+
+
+def _print_dry_run(selections: list[VideoSelection], gameweek: int) -> None:
+    print(f"gameweek {gameweek} — video selection (dry run, no Claude calls, nothing spent)\n")
+    found = 0
+    for sel in selections:
+        if sel.error is not None:
+            print(f"  {sel.creator.creator_id}: ERROR — {sel.error}")
+        elif sel.video is None:
+            print(f"  {sel.creator.creator_id}: no video found")
+        else:
+            found += 1
+            print(
+                f"  {sel.creator.creator_id}: {sel.video.title!r} "
+                f"({sel.video.video_id}, published {sel.video.published_at.isoformat()})"
+            )
+    print(f"\n{found}/{len(selections)} creators resolved to a video")
 
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Extract + resolve GW1 team-reveal picks")
+    parser = argparse.ArgumentParser(description="Extract + resolve gameweek team-reveal picks")
     parser.add_argument("creator_ids", nargs="*", help="limit to these creator ids")
+    parser.add_argument(
+        "--gameweek",
+        type=int,
+        default=None,
+        help="target gameweek (default: the FPL API's next event)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="select videos and print them per creator; no transcript fetch, no Claude call",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="re-extract even if data/extractions/{video_id}.json already exists",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    summary = run_extraction(creator_ids=args.creator_ids or None)
+    gameweek, published_after = resolve_target_gameweek(args.gameweek)
+
+    if args.dry_run:
+        selections = select_videos(gameweek, published_after, creator_ids=args.creator_ids or None)
+        _print_dry_run(selections, gameweek)
+        return 0
+
+    summary = run_extraction(
+        gameweek, published_after, creator_ids=args.creator_ids or None, force=args.force
+    )
     print(
         f"extracted {summary.succeeded}/{summary.attempted} creators "
-        f"({summary.failed} produced nothing)"
+        f"({summary.failed} produced nothing, {summary.skip_count} skipped/reused)"
     )
     print(f"match-quality report written to {summary.report_path}")
     return 0 if summary.succeeded else 1
