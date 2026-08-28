@@ -34,6 +34,7 @@ from pathlib import Path
 
 import anthropic
 from pydantic import BaseModel, Field, ValidationError
+from youtube_transcript_api import RequestBlocked, YouTubeRequestFailed
 
 from fpl_oracle.extract.extractor import ExtractionError, extract_picks
 from fpl_oracle.extract.schemas import VideoExtraction
@@ -448,6 +449,7 @@ def run_extraction(
     resolved: list[ResolvedExtraction] = []
     failures: list[tuple[str, str]] = []
     skipped: list[str] = []
+    blocked_creators: list[str] = []
     report_path = output_dir / "match_quality.md"
 
     # The report is flushed in `finally`: even if a fail-fast error escapes
@@ -499,7 +501,25 @@ def run_extraction(
                 resolved.append(r)
                 continue
 
-            transcript = fetch_transcript(video.video_id)
+            # A blocked IP must not take down a PAID run. fetch_transcript
+            # re-raises RequestBlocked/YouTubeRequestFailed deliberately —
+            # they are environmental, not facts about one video — but here
+            # that would escape the per-creator loop, abort run_extraction,
+            # and lose every creator not yet processed while still having
+            # paid for the ones already done. Record it and move on; the
+            # cached transcripts other creators already have are unaffected.
+            try:
+                transcript = fetch_transcript(video.video_id)
+            except (RequestBlocked, YouTubeRequestFailed) as e:
+                logger.warning(
+                    "run_extract: %s — transcript BLOCKED (%s); skipping this creator, "
+                    "the run continues",
+                    creator.creator_id,
+                    type(e).__name__,
+                )
+                failures.append((creator.creator_id, f"transcript blocked ({type(e).__name__})"))
+                blocked_creators.append(creator.creator_id)
+                continue
             if transcript is None:
                 failures.append((creator.creator_id, f"no transcript for video {video.video_id}"))
                 continue
@@ -541,6 +561,13 @@ def run_extraction(
                 + "\n"
             )
         report_path.write_text(report)
+    if blocked_creators:
+        logger.warning(
+            "run_extract: %d creator(s) LOST to a transcript block: %s. "
+            "These paid nothing and produced nothing — retry once the block lifts.",
+            len(blocked_creators),
+            ", ".join(blocked_creators),
+        )
     return ExtractionRunSummary(
         report_path=report_path,
         attempted=len(selections),
