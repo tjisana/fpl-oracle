@@ -43,6 +43,13 @@ class Transcript(BaseModel):
     language: str
     is_generated: bool
     segments: list[TranscriptSegment]
+    # Where the text came from. Defaults to the YouTube caption scrape so
+    # every transcript already on disk keeps loading unchanged. Anything
+    # not scraped MUST say so: a Gemini-read transcript and a YouTube
+    # caption track are different evidence with different failure modes,
+    # and a squad recommendation that cannot say which one backed a pick
+    # has lost part of its audit trail.
+    source: str = "youtube-captions"
 
     @property
     def full_text(self) -> str:

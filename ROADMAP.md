@@ -34,6 +34,62 @@ Bottom or near-bottom of every private league. 1 free transfer, £0.0 bank.
       a fresh 15 from £100m, which is the WRONG question in-season. With 1 FT
       and no bank, do not ship its squad output as-is.
 
+## STRONGLY CONSIDERING — move transcript ingestion to Gemini
+
+**Status 2026-08-28: evaluated on real data, not yet adopted. This is the
+most consequential open decision in the project.**
+
+The whole pipeline currently rests on a reverse-engineered endpoint.
+There is NO official way to read a third-party YouTube video's captions —
+`captions.download` requires OAuth as the video's owner and 403s for
+everyone else — so `ingest/transcripts.py` scrapes the internal endpoint
+YouTube's player uses. No contract, no quota, no SLA, and it got this
+machine IP-blocked for 5+ hours on GW2 deadline eve, costing creators
+from the harvest.
+
+Gemini takes a YouTube URL as a first-class input (Google owns both
+sides). Measured on real GW2 videos, including the exact ones we were
+blocked from scraping:
+
+| | Scraped captions | Gemini |
+| --- | --- | --- |
+| Picks resolved to real players | 207/257 = **80.5%** | 49/51 = **96.1%** |
+| Creators | 10 | 2 |
+| Blocked by YouTube | yes | no |
+
+The resolution gap is the headline. It is consistent with the mechanism —
+Gemini WATCHES the video and reads names off on-screen team sheets, where
+ASR guesses phonetically ('Burmo' for Mbeumo, 'Virgil van Djk',
+'Calvat Leuin'). That mangling is our oldest unresolved quality issue
+(see KNOWN ISSUES), and this may simply dissolve it. Two creators is
+suggestive, not conclusive — widen the sample before committing.
+
+**What must be resolved before adopting:**
+
+- [ ] **Timestamps are unusable.** Gemini's segment timings are invented:
+      a 317s video came back spanning 461s, a 1832s video spanning 2638s
+      as six segments. `ingest/gemini_transcripts.py` validates against
+      the real duration and DISCARDS all timings when they don't fit,
+      marking the source `:untimed`. That protects the evidence trail
+      from wrong deep links but does not restore it — and timestamped
+      creator quotes are the differentiator no other tool has. Options:
+      align Gemini text against a scraped caption track when one exists,
+      or accept untimed transcripts for creators we cannot scrape.
+- [ ] **Preview status.** The YouTube-URL feature is in preview and free
+      of charge, with pricing and limits explicitly subject to change.
+      Model cost if it leaves preview, and decide the fallback.
+- [ ] **Free tier caps at 8 hours of video/day.** The roster is ~18
+      creators x ~20 min = ~6 hours. Fits, without much room.
+- [ ] **503s under load** — 2 of the first 4 calls. `MAX_ATTEMPTS` is 3;
+      confirm that is enough at full roster scale.
+- [ ] **Widen the comparison** — run both sources across all creators for
+      one gameweek and compare resolution rates properly.
+
+Already built (`ingest/gemini_transcripts.py`, `feat/gemini-transcripts`):
+fetch + timing validation + provenance. `Transcript.source` now records
+where text came from, defaulting to `youtube-captions` so existing files
+load unchanged. Gemini is a deliberate FALLBACK today, not the default.
+
 ## NEXT — in-season (the actual product)
 
 The GW1 system answers a cold-start question: "pick 15 from nothing, £100m."
@@ -100,7 +156,11 @@ is it worth -4?" Different objective, much smaller search space.
       Transfers Incoming"). Deliberate — the alternative is picking up stale
       videos — but revisit if it keeps costing real creators.
 
-- [ ] **Phonetic name mangles still unresolved** — ~71 of 478 picks. `'Virgil van Djk'`,
+- [ ] **Phonetic name mangles still unresolved** — MAY BE DISSOLVED by the
+      Gemini shift above: it reads names off on-screen graphics rather than
+      guessing phonetically, and scored 96.1% vs 80.5% resolution on real GW2
+      videos. Evaluate that before investing further in the resolver.
+- [ ] _(original)_ **Phonetic name mangles** — ~71 of 478 picks. `'Virgil van Djk'`,
       `'Dominic Calvalu'`, `'In Burmo'`, `'Victor Yres'`. First-name references were
       fixed (`b12e4a1`); this is the remaining class. Re-run `scripts/name_probe.py`
       after any resolver change — it is the safety net.
