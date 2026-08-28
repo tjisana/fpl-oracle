@@ -858,6 +858,38 @@ def _render_transfer(record: RunRecord) -> list[str]:
             )
         lines.append("")
 
+    if rec.hit_candidates:
+        lines += [
+            "### If you are willing to take a −4",
+            "",
+            (
+                "Ranked by the same yardstick, restricted to moves at least three "
+                "creators back. This system will not tell you a hit pays for itself — "
+                "consensus scores are band-relative and carry no points unit, so any "
+                "such claim would be invented. Shown so the judgement is yours to make "
+                "on the evidence rather than blocked by a missing number."
+            ),
+            "",
+        ]
+        for m in rec.hit_candidates:
+            lines.append(
+                f"- **{m.out_name} → {m.in_name}** · Δ{m.delta:+.2f} · "
+                f"{m.in_backers} backers · {m.affordability}"
+            )
+        lines.append("")
+
+    if rec.delta_distribution is not None and rec.delta_distribution.moves_considered:
+        d = rec.delta_distribution
+        lines += [
+            (
+                f"_Judged {d.moves_considered} legal moves against a bar of "
+                f"{d.bar_applied:.2f} (uncalibrated \u2014 recorded each week so it "
+                f"can be tuned against outcomes). Best {d.best:+.2f}, "
+                f"p90 {d.p90:+.2f}, median {d.median:+.2f}._"
+            ),
+            "",
+        ]
+
     if rec.worth_considering:
         lines += [
             "### Worth considering, not recommended",

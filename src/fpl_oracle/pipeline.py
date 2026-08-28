@@ -901,7 +901,7 @@ def run_pipeline(
     force_refresh: bool = False,
     nuance_fn: NuanceFn | None = None,
     report_fn: ReportFn | None = None,
-    my_squad_fn: MySquadFn | None = None,
+    my_squad_fn: MySquadFn | None = fetch_my_squad_summary,
     gameweek: int | None = None,
     allow_no_evidence: bool = False,
 ) -> PipelineResult:
@@ -927,7 +927,17 @@ def run_pipeline(
     fake only needs to match `ReportFn`'s signature — the write-to-disk
     step lives in this module, not in the fake.
 
-    `my_squad_fn` is OPT-IN at this level, same shape as `nuance_fn`:
+    `my_squad_fn` DEFAULTS ON, unlike `nuance_fn`. The two are not
+    analogous: nuance is genuinely optional (it costs an LLM call and has
+    a --no-nuance flag), whereas my-squad is free and is meant to run on
+    every real invocation. Defaulting it off made the library's default
+    behaviour the wrong behaviour, and correctness then depended on every
+    caller remembering the parameter — a caller that forgot got
+    `my_squad=None` with the note "not requested for this run", which
+    reads as a deliberate choice rather than an omission. Tests and
+    offline callers pass `my_squad_fn=None` explicitly to stay
+    network-free. Historic note, since this docstring used to say the
+    opposite:
     `None` (the default) means no my-squad fetch happens and
     `RunRecord.my_squad` stays `None` — this is what every existing
     caller (this module's own test suite, and any other direct
@@ -1259,6 +1269,18 @@ def main(argv: list[str] | None = None) -> int:
                     f"    {m.out_name:16} -> {m.in_name:16} {m.delta:+.2f}  "
                     f"backers {m.out_backers}->{m.in_backers}  {m.affordability}"
                 )
+        if rec.hit_candidates:
+            print("  if you'll take a -4 (system will NOT price the hit for you):")
+            for m in rec.hit_candidates:
+                print(
+                    f"    {m.out_name:16} -> {m.in_name:16} {m.delta:+.2f}  {m.in_backers} backers"
+                )
+        d = rec.delta_distribution
+        if d is not None and d.moves_considered:
+            print(
+                f"  judged {d.moves_considered} legal moves vs bar {d.bar_applied:.2f} "
+                f"(best {d.best:+.2f}, p90 {d.p90:+.2f}, median {d.median:+.2f})"
+            )
         print(f"  pricing: {rec.pricing_note}")
     elif record.transfer_note:
         print(f"\ntransfer recommendation: {record.transfer_note}")

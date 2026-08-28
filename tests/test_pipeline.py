@@ -173,6 +173,7 @@ class TestSupersededExtractions:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         # Only the newer video's single pick counts; players 2 and 3, dropped
@@ -199,6 +200,7 @@ class TestSupersededExtractions:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert [i.video_id for i in result.record.superseded_inputs] == ["old_video"]
@@ -220,6 +222,7 @@ class TestSupersededExtractions:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert result.record.counts.extractions_loaded == 2
@@ -239,6 +242,7 @@ class TestRunIdentity:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         result2 = run_pipeline(
             extractions_dir=tmp_path / "missing",
@@ -249,6 +253,7 @@ class TestRunIdentity:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record1, dir1 = result1.record, result1.run_dir
         record2, dir2 = result2.record, result2.run_dir
@@ -279,6 +284,7 @@ class TestInputProvenance:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record = result.record
         assert len(record.inputs) == 1
@@ -308,6 +314,7 @@ class TestPickResolution:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record = result.record
         assert record.counts.picks_used == 1
@@ -343,6 +350,7 @@ class TestAvailabilityVeto:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record, squad = result.record, result.squad
 
@@ -379,6 +387,7 @@ class TestCaptaincyRelaxation:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record, squad = result.record, result.squad
 
@@ -399,6 +408,7 @@ class TestGracefulEmptyInputs:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record, squad = result.record, result.squad
         assert record.counts.extractions_loaded == 0
@@ -419,6 +429,7 @@ class TestGracefulEmptyInputs:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         record, squad = result.record, result.squad
         assert record.counts.extractions_loaded == 0
@@ -446,6 +457,7 @@ class TestPipelineResultShape:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert isinstance(result, PipelineResult)
@@ -470,6 +482,7 @@ class TestNuanceSeam:
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
             nuance_fn=None,
+            my_squad_fn=None,  # keep this test network-free
         )
         assert not (result.run_dir / "nuance.json").exists()
 
@@ -500,6 +513,7 @@ class TestNuanceSeam:
             report_fn=report_fn,
             nuance_fn=fake_nuance_fn,
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         # Display names reach the nuance pass: the model must EMIT creator
@@ -538,6 +552,7 @@ class TestNuanceSeam:
             report_fn=report_fn,
             nuance_fn=failing_nuance_fn,
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert result.report_path is not None
@@ -569,6 +584,7 @@ class TestForceRefreshSeam:
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
             force_refresh=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert captured["force_refresh"] is True
@@ -591,6 +607,7 @@ class TestForceRefreshSeam:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert captured["force_refresh"] is False
@@ -613,6 +630,7 @@ class TestForceRefreshSeam:
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
             force_refresh=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
 
@@ -639,6 +657,7 @@ class TestBootstrapFetchedAt:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         assert result.record.bootstrap_fetched_at is None
 
@@ -756,6 +775,7 @@ class TestMySquadWiring:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert result.record.my_squad is None
@@ -858,6 +878,7 @@ class TestMySquadWiring:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         with_my_squad = run_pipeline(
             extractions_dir=extractions,
@@ -889,6 +910,7 @@ class TestPipelineResultDiffAndAvailability:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         assert result.diff.previous_run_id is None
         assert set(result.diff.players_in) == {p.player_id for p in result.squad.players}
@@ -910,6 +932,7 @@ class TestPipelineResultDiffAndAvailability:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         second = run_pipeline(
             extractions_dir=tmp_path / "missing",
@@ -920,6 +943,7 @@ class TestPipelineResultDiffAndAvailability:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         assert second.diff.previous_run_id == first.record.run_id
         assert second.diff.new_captain == second.record.solver.captain
@@ -936,6 +960,7 @@ class TestPipelineResultDiffAndAvailability:
             # These fixtures solve on an empty extractions dir on purpose —
             # they exercise diff/availability/my-squad plumbing, not consensus.
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         assert set(result.availability) == {p.player_id for p in pool}
 
@@ -954,6 +979,7 @@ class TestPipelineResultDiffAndAvailability:
             registry=[],
             allow_no_evidence=True,
             report_fn=report_fn,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert "diff" in captured
@@ -1069,6 +1095,7 @@ class TestNoConsensusEvidenceGuard:
                 player_db=db,
                 registry=[],
                 report_fn=_fake_report_fn,
+                my_squad_fn=None,  # keep this test network-free
             )
         assert "Refusing to solve" in str(excinfo.value)
 
@@ -1084,6 +1111,7 @@ class TestNoConsensusEvidenceGuard:
                 player_db=db,
                 registry=[],
                 report_fn=_fake_report_fn,
+                my_squad_fn=None,  # keep this test network-free
             )
         assert not runs.exists() or list(runs.glob("*/squad.json")) == []
 
@@ -1096,6 +1124,7 @@ class TestNoConsensusEvidenceGuard:
             registry=[],
             report_fn=_fake_report_fn,
             allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
         )
         assert len(result.squad.players) == 15
 
@@ -1129,6 +1158,7 @@ class TestStaleGameweekExtractionsAreExcluded:
             registry=[_creator("current-creator"), _creator("stale-creator")],
             report_fn=_fake_report_fn,
             gameweek=2,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert result.record.counts.extractions_loaded == 1
@@ -1151,6 +1181,7 @@ class TestStaleGameweekExtractionsAreExcluded:
             player_db=db,
             registry=[_creator("a"), _creator("b")],
             report_fn=_fake_report_fn,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert result.record.counts.extractions_loaded == 2
@@ -1173,6 +1204,7 @@ class TestStaleGameweekExtractionsAreExcluded:
             registry=[_creator("a")],
             report_fn=_fake_report_fn,
             gameweek=2,
+            my_squad_fn=None,  # keep this test network-free
         )
 
         assert result.record.counts.extractions_loaded == 1

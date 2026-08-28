@@ -111,6 +111,46 @@ class CandidateMove(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class DeltaDistribution(BaseModel):
+    """Summary of the coefficient deltas this run judged.
+
+    MIN_DELTA_TO_RECOMMEND is an uncalibrated guess (see its comment), and
+    it can only stop being one if we record what the distribution actually
+    looked like each week alongside what happened next. Recording it costs
+    nothing now and is the only thing that makes calibration possible
+    later; without it, a future attempt to tune the bar has no data and
+    would just be a differently-confident guess.
+    """
+
+    moves_considered: int
+    best: float | None
+    median: float | None
+    p90: float | None
+    bar_applied: float
+    cleared_bar: bool
+
+
+def _distribution(moves: list[CandidateMove], cleared: bool) -> DeltaDistribution:
+    deltas = sorted((m.delta for m in moves), reverse=True)
+    if not deltas:
+        return DeltaDistribution(
+            moves_considered=0,
+            best=None,
+            median=None,
+            p90=None,
+            bar_applied=MIN_DELTA_TO_RECOMMEND,
+            cleared_bar=False,
+        )
+    return DeltaDistribution(
+        moves_considered=len(deltas),
+        best=deltas[0],
+        median=deltas[len(deltas) // 2],
+        p90=deltas[max(0, int(len(deltas) * 0.1) - 1)],
+        bar_applied=MIN_DELTA_TO_RECOMMEND,
+        cleared_bar=cleared,
+    )
+
+
 class TransferRecommendation(BaseModel):
     """Always fully populated, including when the answer is 'do nothing'.
 
@@ -134,6 +174,15 @@ class TransferRecommendation(BaseModel):
             "endorsing them would mean pricing a -4 in units it does not have"
         ),
     )
+    hit_candidates: list[CandidateMove] = Field(
+        default_factory=list,
+        description=(
+            "the strongest well-backed moves regardless of whether they clear the "
+            "free-transfer bar. Presented for a human who is willing to take a -4; the "
+            "system states the evidence and explicitly does NOT claim the hit is worth it."
+        ),
+    )
+    delta_distribution: DeltaDistribution | None = None
     reasoning: str
     pricing_note: str
     unavailable_owned: list[str] = Field(default_factory=list)
@@ -269,6 +318,21 @@ def best_per_outgoing(moves: list[CandidateMove], limit: int) -> list[CandidateM
     return out
 
 
+def _hit_candidates(moves: list[CandidateMove], limit: int = SHORTLIST_SIZE) -> list[CandidateMove]:
+    """The strongest well-backed moves, whether or not they clear the bar.
+
+    This list exists because refusing to price a -4 is the right call for
+    the SYSTEM and a poor answer for a manager sitting near the bottom of
+    their leagues, for whom passivity has its own cost. So: surface the
+    evidence, rank it, and say plainly that the judgement is the owner's.
+    What is NOT done here is inventing a threshold that claims the hit
+    pays for itself — band scores carry no points unit, and a number that
+    implied otherwise would be false precision.
+    """
+    backed = [m for m in moves if m.in_backers >= MIN_BACKERS_TO_RECOMMEND and m.delta > 0]
+    return best_per_outgoing(backed, limit)
+
+
 def recommend_transfer(
     *,
     owned: list[Player],
@@ -307,6 +371,7 @@ def recommend_transfer(
             recommended=None,
             shortlist=[],
             forced_moves=[],
+            delta_distribution=_distribution([], cleared=False),
             reasoning=(
                 "No legal single transfer was found at all. With a full squad that usually "
                 "means the candidate pool is empty — check that extraction actually ran for "
@@ -327,6 +392,8 @@ def recommend_transfer(
             recommended=best_forced,
             shortlist=shortlist,
             forced_moves=forced[:SHORTLIST_SIZE],
+            hit_candidates=_hit_candidates([m for m in moves if not m.forced]),
+            delta_distribution=_distribution(moves, cleared=True),
             reasoning=(
                 f"{best_forced.out_name} is unavailable, so this is a move forced by facts "
                 f"rather than a judgement call on form. Best available replacement is "
@@ -349,6 +416,7 @@ def recommend_transfer(
             recommended=best,
             shortlist=shortlist,
             forced_moves=[],
+            delta_distribution=_distribution(moves, cleared=True),
             reasoning=(
                 f"{best.in_name} is backed by {best.in_backers} creators and improves the "
                 f"squad's coefficient by {best.delta:+.2f} over {best.out_name}"
@@ -385,6 +453,8 @@ def recommend_transfer(
         shortlist=shortlist,
         forced_moves=[],
         worth_considering=considering,
+        hit_candidates=_hit_candidates(moves),
+        delta_distribution=_distribution(moves, cleared=False),
         reasoning=(
             f"Roll the transfer: {why}. Banking it leaves "
             f"{min(free_transfers + 1, 5)} for next gameweek." + ft_note
