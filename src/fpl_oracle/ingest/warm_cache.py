@@ -429,6 +429,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # httpx logs every request URL at INFO — and the YouTube Data API takes
+    # its key as a URL QUERY PARAMETER, so INFO-level httpx logging prints
+    # the key in clear text. Same trap as `deadline.py` (fixed in 1212ea8);
+    # any module that turns on INFO logging while calling the YouTube API
+    # re-opens it. Silence the transport; keep our own logs.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     since = parse_since(args.since) if args.since else default_since()
 
