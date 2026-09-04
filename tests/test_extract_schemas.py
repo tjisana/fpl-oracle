@@ -13,6 +13,7 @@ from fpl_oracle.extract.schemas import (
     Pick,
     PickAction,
     Provenance,
+    SquadContext,
     Urgency,
     VideoExtraction,
 )
@@ -176,3 +177,18 @@ class TestInSeasonExtensions:
         )
         assert pick.urgency is Urgency.BEFORE_PRICE_CHANGE
         assert pick.time_horizon == 10
+
+    def test_squad_context_defaults_to_none(self) -> None:
+        # Most picks aren't tied to a drafted squad at all (watchlist,
+        # avoid) — every extraction file written before this field existed
+        # must also keep parsing without it.
+        pick = Pick.model_validate(_pick_payload())
+        assert pick.squad_context is None
+
+    def test_squad_context_accepts_free_hit(self) -> None:
+        pick = Pick.model_validate(_pick_payload(squad_context="free_hit"))
+        assert pick.squad_context is SquadContext.FREE_HIT
+
+    def test_squad_context_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            Pick.model_validate(_pick_payload(squad_context="permanent_team"))

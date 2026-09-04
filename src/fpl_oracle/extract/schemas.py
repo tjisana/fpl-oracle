@@ -38,6 +38,10 @@ Design decisions carried in here:
   distinction is the difference between acting today and losing 0.1m of
   team value. Optional, because most statements genuinely carry no
   urgency signal and forcing the model to invent one would be noise.
+- SQUAD_CONTEXT (added for in-season, 2026-09-03): tags which drafted squad
+  a pick belongs to (`own_team` / `wildcard` / `free_hit`), so a one-week
+  free-hit draft can be kept in the £100m solver's evidence while excluded
+  from the in-season transfer recommender, which only advises permanent moves.
 """
 
 from __future__ import annotations
@@ -90,6 +94,20 @@ class Provenance(StrEnum):
 
     PERSONAL = "personal"
     GROUP = "group"
+
+
+class SquadContext(StrEnum):
+    """Which drafted squad a pick belongs to, when a video presents one.
+
+    A free-hit team is a one-gameweek fixture play that reverts afterwards,
+    so downstream it must not be read as a lasting endorsement (the
+    in-season transfer recommender excludes it; the £100m solver keeps
+    it). `None` on a pick means "not tied to a drafted squad, or unclear".
+    """
+
+    OWN_TEAM = "own_team"
+    WILDCARD = "wildcard"
+    FREE_HIT = "free_hit"
 
 
 class Pick(BaseModel):
@@ -165,6 +183,18 @@ class Pick(BaseModel):
             "gameweek, 'no_rush' when they explicitly say it can wait. Null when they "
             "give no timing signal at all — most picks. Do not infer urgency from "
             "enthusiasm; only from an actual statement about timing."
+        ),
+    )
+    squad_context: SquadContext | None = Field(
+        default=None,
+        description=(
+            "Which drafted squad this pick belongs to, if the video presents one: "
+            "'own_team' for the creator's actual team and transfers into it; "
+            "'wildcard' for a fresh 15 built on a wildcard; 'free_hit' for a "
+            "one-gameweek free-hit team that reverts after the gameweek. Null for "
+            "opinions not tied to a drafted squad (most watchlist and avoid picks) "
+            "and when it is genuinely unclear which squad is meant. Never label a "
+            "squad free_hit unless the creator says it is a free hit."
         ),
     )
 

@@ -30,6 +30,7 @@ from fpl_oracle.report.gameweek import render_report, write_report
 from fpl_oracle.report.models import Concern, ConcernKind, PlayerNuance, SquadNuance
 from fpl_oracle.roster.models import Creator, Tier
 from fpl_oracle.solver.squad import Squad, SquadPlayer
+from fpl_oracle.solver.transfers import TransferRecommendation, Verdict
 
 # ---------------------------------------------------------------------------
 # Fixtures.
@@ -116,6 +117,10 @@ def _record(
     inputs: list[ExtractionInput] | None = None,
     git: GitInfo | None = None,
     bootstrap_fetched_at: datetime | None = None,
+    transfer_note: str = "",
+    picks_free_hit_excluded_from_transfer: int = 0,
+    free_hit_sources: list[str] | None = None,
+    transfer_recommendation: TransferRecommendation | None = None,
 ) -> RunRecord:
     return RunRecord(
         run_id="20260819T120000Z-abc1234",
@@ -129,7 +134,11 @@ def _record(
         creator_weights=creator_weights or {},
         excluded_players=excluded_players or [],
         counts=RunCounts(
-            extractions_loaded=1, picks_used=2, picks_skipped_unresolved=1, players_in_pool=10
+            extractions_loaded=1,
+            picks_used=2,
+            picks_skipped_unresolved=1,
+            players_in_pool=10,
+            picks_free_hit_excluded_from_transfer=picks_free_hit_excluded_from_transfer,
         ),
         solver=SolverOutcome(
             total_cost_m=50.0,
@@ -139,6 +148,9 @@ def _record(
             captain_options_required=captain_options_required,
             relaxed_captaincy=relaxed_captaincy,
         ),
+        transfer_note=transfer_note,
+        free_hit_sources=free_hit_sources or [],
+        transfer_recommendation=transfer_recommendation,
     )
 
 
@@ -681,6 +693,107 @@ class TestEvidenceQualityAndProvenance:
             creators=[],
         )
         assert "published unknown" in report
+
+
+class TestFreeHitExclusionNotice:
+    """A free-hit draft is a one-gameweek fixture play, not a lasting
+    endorsement — dropped from the transfer recommender's evidence
+    (`pipeline._build_picks(include_free_hit=False)`), but still counted
+    toward the £100m squad below. The report says so whenever any were
+    dropped."""
+
+    def test_exclusion_line_renders_with_resolved_creator_names_when_count_positive(
+        self,
+    ) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        record = _record(
+            transfer_note="no strong enough case for a hit this week",
+            picks_free_hit_excluded_from_transfer=2,
+            free_hit_sources=["andy", "bob"],
+        )
+        report = render_report(
+            record=record,
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[_creator("andy", "Andy FPL"), _creator("bob", "Bob FPL")],
+        )
+        assert "Free-hit drafts kept out of this section: 2 picks from Andy FPL, Bob FPL" in report
+
+    def test_exclusion_line_uses_singular_pick_for_count_of_one(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        record = _record(
+            transfer_note="no strong enough case for a hit this week",
+            picks_free_hit_excluded_from_transfer=1,
+            free_hit_sources=["andy"],
+        )
+        report = render_report(
+            record=record,
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[_creator("andy", "Andy FPL")],
+        )
+        assert "Free-hit drafts kept out of this section: 1 pick from Andy FPL" in report
+
+    def test_exclusion_line_renders_when_a_transfer_recommendation_is_present(self) -> None:
+        """The exclusion notice also renders in the `rec is not None`
+        branch (a real recommendation came out) — distinct from the
+        `rec is None` branch covered above."""
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        rec = TransferRecommendation(
+            verdict=Verdict.ROLL,
+            gameweek=3,
+            free_transfers=1,
+            recommended=None,
+            shortlist=[],
+            forced_moves=[],
+            reasoning="Squad is fine — bank the transfer.",
+            pricing_note="pricing derived and reconciled",
+        )
+        record = _record(
+            transfer_note=rec.reasoning,
+            picks_free_hit_excluded_from_transfer=1,
+            free_hit_sources=["andy"],
+            transfer_recommendation=rec,
+        )
+        report = render_report(
+            record=record,
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[_creator("andy", "Andy FPL")],
+        )
+        assert "## This week's transfer" in report
+        assert "Free-hit drafts kept out of this section: 1 pick from Andy FPL" in report
+
+    def test_exclusion_line_absent_when_count_zero(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        record = _record(transfer_note="no owned squad available — transfer recommendation skipped")
+        report = render_report(
+            record=record,
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[],
+        )
+        assert "Free-hit drafts kept out of this section" not in report
 
 
 class TestWriteReport:

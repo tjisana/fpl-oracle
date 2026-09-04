@@ -42,6 +42,7 @@ from fpl_oracle.extract.schemas import (
     Pick,
     PickAction,
     Provenance,
+    SquadContext,
     Urgency,
     VideoExtraction,
 )
@@ -91,6 +92,7 @@ class _WirePick(BaseModel):
     reasoning: str = Field(description=_desc(Pick, "reasoning"))
     provenance: Provenance = Field(description=_desc(Pick, "provenance"))
     urgency: Urgency | None = Field(description=_desc(Pick, "urgency"))
+    squad_context: SquadContext | None = Field(description=_desc(Pick, "squad_context"))
 
 
 class _WireChipPlan(BaseModel):

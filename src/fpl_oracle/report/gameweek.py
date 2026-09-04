@@ -811,7 +811,18 @@ _SOLVER_SQUAD_CAVEAT = (
 )
 
 
-def _render_transfer(record: RunRecord) -> list[str]:
+def _free_hit_exclusion_line(record: RunRecord, creators_by_id: dict[str, str]) -> str:
+    n = record.counts.picks_free_hit_excluded_from_transfer
+    names = ", ".join(_creator_name(creators_by_id, cid) for cid in record.free_hit_sources)
+    pick_word = "pick" if n == 1 else "picks"
+    return (
+        f"_Free-hit drafts kept out of this section: {n} {pick_word} from {names}. "
+        "A free-hit team is a one-week fixture play, not a lasting endorsement; those "
+        "picks still count toward the £100m squad below._"
+    )
+
+
+def _render_transfer(record: RunRecord, creators_by_id: dict[str, str]) -> list[str]:
     """The in-season answer, rendered FIRST — ahead of the squad tables.
 
     Everything below it describes a squad built from £100m, which is the
@@ -822,7 +833,10 @@ def _render_transfer(record: RunRecord) -> list[str]:
     if rec is None:
         if not record.transfer_note:
             return []
-        return ["## This week's transfer", "", f"_{record.transfer_note}_", ""]
+        lines = ["## This week's transfer", "", f"_{record.transfer_note}_", ""]
+        if record.counts.picks_free_hit_excluded_from_transfer > 0:
+            lines += [_free_hit_exclusion_line(record, creators_by_id), ""]
+        return lines
 
     lines = [f"## This week's transfer — {rec.verdict}", "", rec.reasoning, ""]
 
@@ -831,6 +845,9 @@ def _render_transfer(record: RunRecord) -> list[str]:
             f"> **Unavailable in your squad:** {', '.join(rec.unavailable_owned)}",
             "",
         ]
+
+    if record.counts.picks_free_hit_excluded_from_transfer > 0:
+        lines += [_free_hit_exclusion_line(record, creators_by_id), ""]
 
     if rec.recommended is not None:
         m = rec.recommended
@@ -943,7 +960,7 @@ def render_report(
 
     lines: list[str] = []
     lines += _render_header(record, squad, extractions)
-    lines += _render_transfer(record)
+    lines += _render_transfer(record, creators_by_id)
     lines += _render_diff(diff, db)
     lines += _render_availability_callout(squad, availability, db)
     lines += _render_squad_tables(squad, db, record, scores, availability)

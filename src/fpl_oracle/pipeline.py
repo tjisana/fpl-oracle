@@ -54,7 +54,7 @@ from pydantic import BaseModel, Field, ValidationError
 from fpl_oracle.consensus.captaincy import CaptaincyElection, elect, required_options
 from fpl_oracle.consensus.scoring import PlayerScore, score_picks
 from fpl_oracle.extract.run_extract import ResolvedExtraction
-from fpl_oracle.extract.schemas import PickAction
+from fpl_oracle.extract.schemas import PickAction, SquadContext
 from fpl_oracle.fpl import client as fpl_client
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict, filter_squad_candidates
 from fpl_oracle.fpl.client import CACHE_DIR, LeagueStanding
@@ -159,6 +159,14 @@ class RunCounts(BaseModel):
     picks_used: int
     picks_skipped_unresolved: int
     players_in_pool: int = Field(description="availability-filtered candidate pool the solver saw")
+    picks_free_hit_excluded_from_transfer: int = Field(
+        default=0,
+        description=(
+            "free-hit-draft picks dropped from the scores the transfer recommender "
+            "saw; they still counted toward the solver's squad. Defaults to 0 so "
+            "older run.json files parse."
+        ),
+    )
 
 
 class SolverOutcome(BaseModel):
@@ -271,6 +279,14 @@ class RunRecord(BaseModel):
     my_squad_note: str = Field(
         default="",
         description="why my_squad is None, or a short confirmation of what was fetched",
+    )
+    free_hit_sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "creator ids whose loaded extraction carried at least one free-hit pick, "
+            "sorted. Recorded so the report can name whose one-week drafts were kept "
+            "out of the transfer section."
+        ),
     )
 
 
@@ -623,23 +639,61 @@ def _extraction_input(path: Path, raw: bytes, resolved: ResolvedExtraction) -> E
 
 def _build_picks(
     loaded: list[tuple[Path, bytes, ResolvedExtraction]],
-) -> tuple[dict[str, list[tuple[int, PickAction, int]]], int, int]:
+    *,
+    include_free_hit: bool = True,
+) -> tuple[dict[str, list[tuple[int, PickAction, int]]], int, int, int]:
     """Fan every loaded extraction's picks into `picks_by_creator`, using
     only picks that resolved to a real `player_id` (per-pick MATCHED
-    stamp from `extract.run_extract.resolve_extraction`). Returns the
-    picks map plus (used, skipped-as-unresolved) counts."""
+    stamp from `extract.run_extract.resolve_extraction`). Returns
+    `(picks_by_creator, used, skipped_unresolved, skipped_free_hit)`.
+
+    `include_free_hit=False` drops every pick whose `squad_context` is
+    `SquadContext.FREE_HIT` and counts it in the fourth slot. Picks with
+    `None`, `own_team` or `wildcard` are always kept.
+
+    A free-hit team is a one-gameweek fixture play that reverts
+    afterwards, not a lasting endorsement — the in-season transfer
+    recommender (which advises PERMANENT moves) is scored with those
+    picks excluded, via this flag. The £100m solver still sees them
+    (the default `include_free_hit=True` call), because "who is good
+    this week" is real signal for the wildcard/free-hit answer.
+
+    Order of checks per pick: unresolved (`player_id is None`) is
+    counted as skipped FIRST and never as free-hit; then the free-hit
+    check."""
     picks_by_creator: dict[str, list[tuple[int, PickAction, int]]] = defaultdict(list)
     used = 0
     skipped = 0
+    skipped_free_hit = 0
     for _path, _raw, resolved in loaded:
         creator_id = resolved.extraction.creator_id
         for pick in resolved.extraction.picks:
             if pick.player_id is None:
                 skipped += 1
                 continue
+            if not include_free_hit and pick.squad_context is SquadContext.FREE_HIT:
+                skipped_free_hit += 1
+                continue
             picks_by_creator[creator_id].append((pick.player_id, pick.action, pick.conviction))
             used += 1
-    return dict(picks_by_creator), used, skipped
+    return dict(picks_by_creator), used, skipped, skipped_free_hit
+
+
+def _free_hit_sources(loaded: list[tuple[Path, bytes, ResolvedExtraction]]) -> list[str]:
+    """Sorted creator ids whose loaded extraction carried at least one
+    RESOLVED free-hit pick — resolved only, to match what
+    `_build_picks(include_free_hit=False)` actually excludes from the
+    transfer recommender's scores (an unresolved pick never reaches
+    `picks_by_creator` regardless of its `squad_context`)."""
+    creator_ids: set[str] = set()
+    for _path, _raw, resolved in loaded:
+        creator_id = resolved.extraction.creator_id
+        if any(
+            pick.player_id is not None and pick.squad_context is SquadContext.FREE_HIT
+            for pick in resolved.extraction.picks
+        ):
+            creator_ids.add(creator_id)
+    return sorted(creator_ids)
 
 
 def _creator_weights(creators: list[Creator]) -> dict[str, float]:
@@ -974,7 +1028,10 @@ def run_pipeline(
 
     all_loaded, wrong_gameweek = _load_extractions(extractions_dir, gameweek)
     loaded, superseded = _latest_per_creator(all_loaded)
-    picks_by_creator, picks_used, picks_skipped = _build_picks(loaded)
+    picks_by_creator, picks_used, picks_skipped, _ = _build_picks(loaded)
+    transfer_picks_by_creator, _, _, free_hit_excluded = _build_picks(
+        loaded, include_free_hit=False
+    )
     if picks_used == 0 and not allow_no_evidence:
         raise NoConsensusEvidenceError(
             f"no usable creator picks for GW{gameweek}: {len(all_loaded)} extraction "
@@ -995,6 +1052,15 @@ def run_pipeline(
     availability_multipliers = {v.player_id: v.multiplier for v in availability.verdicts.values()}
 
     scores = score_picks(picks_by_creator, creator_weights, players_by_id)
+    # The transfer recommender advises PERMANENT moves, so it is scored on
+    # the evidence minus free-hit drafts. Same scoreboard when nothing was
+    # excluded — a second score_picks call would only re-normalise the same
+    # votes to the same numbers.
+    transfer_scores = (
+        score_picks(transfer_picks_by_creator, creator_weights, players_by_id)
+        if free_hit_excluded
+        else scores
+    )
     election = elect(picks_by_creator, creator_weights, eligible_player_ids=set(players_by_id))
     required = required_options(election)
 
@@ -1029,7 +1095,7 @@ def run_pipeline(
                 my_squad=my_squad_summary,
                 db=db,
                 pool=pool,
-                scores=scores,
+                scores=transfer_scores,
                 verdicts=availability.verdicts,
                 gameweek=gameweek,
             )
@@ -1042,6 +1108,7 @@ def run_pipeline(
     run_id, run_dir = _reserve_run_dir(runs_dir, _base_run_id(started_at, git))
 
     weights_used = {cid: creator_weights.get(cid, 0.0) for cid in picks_by_creator}
+    free_hit_sources = _free_hit_sources(loaded)
     record = RunRecord(
         run_id=run_id,
         started_at=started_at,
@@ -1063,6 +1130,7 @@ def run_pipeline(
             picks_used=picks_used,
             picks_skipped_unresolved=picks_skipped,
             players_in_pool=len(pool),
+            picks_free_hit_excluded_from_transfer=free_hit_excluded,
         ),
         solver=SolverOutcome(
             total_cost_m=squad.total_cost_m,
@@ -1074,6 +1142,7 @@ def run_pipeline(
         ),
         my_squad=my_squad_summary,
         my_squad_note=my_squad_note,
+        free_hit_sources=free_hit_sources,
     )
 
     (run_dir / "run.json").write_text(record.model_dump_json(indent=2))
