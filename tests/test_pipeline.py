@@ -20,7 +20,7 @@ import pytest
 
 from fpl_oracle import pipeline
 from fpl_oracle.extract.run_extract import ResolvedExtraction
-from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
+from fpl_oracle.extract.schemas import Chip, ChipPlan, Pick, PickAction, Provenance, VideoExtraction
 from fpl_oracle.fpl.client import EntrySummary
 from fpl_oracle.fpl.players import Player, PlayerDB, Position
 from fpl_oracle.pipeline import (
@@ -120,6 +120,7 @@ def _write_extraction(
     picks: list[Pick],
     published_at: datetime = datetime(2026, 8, 1, tzinfo=UTC),
     gameweek: int | None = 1,
+    chip_plans: list[ChipPlan] | None = None,
 ) -> Path:
     extraction = VideoExtraction(
         creator_id=creator_id,
@@ -128,11 +129,28 @@ def _write_extraction(
         published_at=published_at,
         gameweek=gameweek,
         picks=picks,
+        chip_plans=chip_plans or [],
     )
     resolved = ResolvedExtraction(extraction=extraction, resolutions=[])
     path = directory / f"{video_id}.json"
     path.write_text(resolved.model_dump_json())
     return path
+
+
+def _chip_plan(
+    chip: Chip = Chip.WILDCARD,
+    target_gameweek: int | None = None,
+    conviction: int = 4,
+    reasoning: str = "test chip reasoning",
+    provenance: Provenance = Provenance.PERSONAL,
+) -> ChipPlan:
+    return ChipPlan(
+        chip=chip,
+        target_gameweek=target_gameweek,
+        conviction=conviction,
+        reasoning=reasoning,
+        provenance=provenance,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +723,64 @@ class TestBootstrapFetchedAt:
         assert record.inputs[0].published_at is None
         assert record.my_squad is None
         assert record.my_squad_note == ""
+        assert record.chip_consensus is None
+
+
+class TestChipConsensusWiring:
+    """`record.chip_consensus` is computed via `consensus.chips.
+    summarize_chip_plans` for every run, purely from the loaded
+    extractions' `chip_plans` and the run's `creator_weights` — see
+    `consensus/chips.py` for the tallying logic itself, tested there.
+    This only checks the pipeline actually wires it in."""
+
+    def test_chip_plans_from_a_fixture_extraction_populate_the_record(self, tmp_path: Path) -> None:
+        extractions = tmp_path / "extractions"
+        extractions.mkdir()
+        _write_extraction(
+            extractions,
+            "andy",
+            "v1",
+            [_pick(1)],
+            gameweek=3,
+            chip_plans=[_chip_plan(chip=Chip.WILDCARD, target_gameweek=3, conviction=5)],
+        )
+
+        result = run_pipeline(
+            extractions_dir=extractions,
+            runs_dir=tmp_path / "runs",
+            player_db=_make_db(_legal_pool()),
+            registry=[_creator("andy")],
+            report_fn=_fake_report_fn,
+            gameweek=3,
+            my_squad_fn=None,
+        )
+
+        consensus = result.record.chip_consensus
+        assert consensus is not None
+        assert consensus.gameweek == 3
+        assert consensus.creators_with_plans == 1
+        wildcard = next(t for t in consensus.tallies if t.chip is Chip.WILDCARD)
+        assert [v.creator_id for v in wildcard.this_gameweek] == ["andy"]
+
+    def test_chip_consensus_is_still_computed_with_no_chip_plans_at_all(
+        self, tmp_path: Path
+    ) -> None:
+        """Pure, so it must run on every test fixture, even ones that
+        never mention a chip — an empty-but-present `ChipConsensus`, not
+        `None`, whenever extractions were loaded at all."""
+        db = _make_db(_legal_pool())
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[],
+            report_fn=_fake_report_fn,
+            allow_no_evidence=True,
+            my_squad_fn=None,
+        )
+        assert result.record.chip_consensus is not None
+        assert result.record.chip_consensus.creators_with_plans == 0
+        assert len(result.record.chip_consensus.tallies) == len(Chip)
 
 
 # ---------------------------------------------------------------------------

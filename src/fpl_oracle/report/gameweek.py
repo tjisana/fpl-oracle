@@ -52,9 +52,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fpl_oracle.consensus.captaincy import CaptaincyElection, required_options
+from fpl_oracle.consensus.chips import ChipTally, ChipVote
 from fpl_oracle.consensus.scoring import CreatorVote, PlayerScore, vote_value
 from fpl_oracle.extract.run_extract import ResolvedExtraction
-from fpl_oracle.extract.schemas import Pick, PickAction, Provenance
+from fpl_oracle.extract.schemas import Chip, Pick, PickAction, Provenance
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict
 from fpl_oracle.fpl.players import PlayerDB, Position
 from fpl_oracle.ingest.run_ingest import eligible_creators
@@ -800,6 +801,103 @@ def _render_diff(diff: SquadDiff | None, db: PlayerDB) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Chip consensus — creators' own stated chip-timing intentions
+# (`consensus.chips.summarize_chip_plans`), tallied per chip. OBSERVATIONAL
+# ONLY: nothing here feeds the solver/consensus scoring above; this only
+# lays out what `record.chip_consensus` already computed.
+# ---------------------------------------------------------------------------
+
+
+_CHIP_DISPLAY_NAMES: dict[Chip, str] = {
+    Chip.WILDCARD: "Wildcard",
+    Chip.FREE_HIT: "Free Hit",
+    Chip.BENCH_BOOST: "Bench Boost",
+    Chip.TRIPLE_CAPTAIN: "Triple Captain",
+}
+
+
+def _chip_vote_name(creators_by_id: dict[str, str], vote: ChipVote) -> str:
+    name = _creator_name(creators_by_id, vote.creator_id)
+    return f"{name} (group)" if vote.provenance is Provenance.GROUP else name
+
+
+def _this_gameweek_cell(tally: ChipTally, creators_by_id: dict[str, str]) -> str:
+    if not tally.this_gameweek:
+        return "—"
+    names = ", ".join(_chip_vote_name(creators_by_id, vote) for vote in tally.this_gameweek)
+    count = len(tally.this_gameweek)
+    return f"**{count}** ({_pct(tally.this_gameweek_share)} of weight): {names}"
+
+
+def _later_cell(tally: ChipTally, creators_by_id: dict[str, str]) -> str:
+    if not tally.later:
+        return "—"
+    # `tally.later` is already sorted by (target_gameweek, creator_id), so
+    # equal-gameweek votes are adjacent — a single pass groups them without
+    # needing to re-sort.
+    groups: list[tuple[int | None, list[str]]] = []
+    for vote in tally.later:
+        name = _chip_vote_name(creators_by_id, vote)
+        if groups and groups[-1][0] == vote.target_gameweek:
+            groups[-1][1].append(name)
+        else:
+            groups.append((vote.target_gameweek, [name]))
+    return " · ".join(f"GW{gw}: {', '.join(names)}" for gw, names in groups)
+
+
+def _unspecified_cell(tally: ChipTally, creators_by_id: dict[str, str]) -> str:
+    if not tally.unspecified:
+        return "—"
+    return ", ".join(_chip_vote_name(creators_by_id, vote) for vote in tally.unspecified)
+
+
+def _render_chip_consensus(record: RunRecord, creators_by_id: dict[str, str]) -> list[str]:
+    consensus = record.chip_consensus
+    if consensus is None:
+        return []
+
+    header = (
+        f"## Chip consensus — GW{consensus.gameweek}"
+        if consensus.gameweek is not None
+        else "## Chip consensus"
+    )
+
+    if consensus.creators_with_plans == 0:
+        return [header, "", "_No creator stated a chip intention this week._", ""]
+
+    lines = [
+        header,
+        "",
+        (
+            'Stated intentions only: a creator saying "I\'m wildcarding this week", never '
+            f"generic advice. {consensus.creators_with_plans} of "
+            f"{consensus.contributing_creators} contributing creators stated a chip plan."
+        ),
+        "",
+    ]
+    rows = [
+        [
+            _CHIP_DISPLAY_NAMES[tally.chip],
+            _this_gameweek_cell(tally, creators_by_id),
+            _later_cell(tally, creators_by_id),
+            _unspecified_cell(tally, creators_by_id),
+        ]
+        for tally in consensus.tallies
+    ]
+    lines += _table(["Chip", "This gameweek", "Later", "Unspecified"], rows)
+    lines.append("")
+
+    if consensus.stale:
+        lines.append(
+            f"_Ignored as past-dated: {len(consensus.stale)} plan(s) targeting an earlier "
+            "gameweek._"
+        )
+        lines.append("")
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Entry point.
 # ---------------------------------------------------------------------------
 
@@ -944,6 +1042,7 @@ def render_report(
     lines: list[str] = []
     lines += _render_header(record, squad, extractions)
     lines += _render_transfer(record)
+    lines += _render_chip_consensus(record, creators_by_id)
     lines += _render_diff(diff, db)
     lines += _render_availability_callout(squad, availability, db)
     lines += _render_squad_tables(squad, db, record, scores, availability)

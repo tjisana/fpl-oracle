@@ -52,6 +52,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 
 from fpl_oracle.consensus.captaincy import CaptaincyElection, elect, required_options
+from fpl_oracle.consensus.chips import ChipConsensus, summarize_chip_plans
 from fpl_oracle.consensus.scoring import PlayerScore, score_picks
 from fpl_oracle.extract.run_extract import ResolvedExtraction
 from fpl_oracle.extract.schemas import PickAction
@@ -267,6 +268,14 @@ class RunRecord(BaseModel):
     transfer_note: str = Field(
         default="",
         description="the recommendation's reasoning, or why there isn't one",
+    )
+    chip_consensus: ChipConsensus | None = Field(
+        default=None,
+        description=(
+            "creators' own stated chip intentions, tallied per chip for this gameweek / "
+            "later / unspecified. Observational — nothing here feeds the solver. Defaults "
+            "to None so older run.json files parse."
+        ),
     )
     my_squad_note: str = Field(
         default="",
@@ -984,6 +993,14 @@ def run_pipeline(
         )
     creator_weights = _creator_weights(creators)
 
+    # Observational: creators' own stated chip-timing intentions, tallied
+    # per chip for this gameweek / later / unspecified. Pure arithmetic
+    # over the same `loaded` extractions and `creator_weights` already
+    # computed above — never fed into scoring/election/the solver below.
+    chip_consensus = summarize_chip_plans(
+        [resolved.extraction for _p, _r, resolved in loaded], creator_weights, gameweek
+    )
+
     availability = filter_squad_candidates(db.all_players(), min_multiplier=0.0)
     pool = availability.eligible
     players_by_id = {p.player_id: p for p in pool}
@@ -1052,6 +1069,7 @@ def run_pipeline(
         gameweek=gameweek,
         transfer_recommendation=transfer_rec,
         transfer_note=transfer_note,
+        chip_consensus=chip_consensus,
         excluded_wrong_gameweek=[f"{path.name} (GW{found})" for path, found in wrong_gameweek],
         superseded_inputs=[
             _extraction_input(path, raw, resolved) for path, raw, resolved in superseded
