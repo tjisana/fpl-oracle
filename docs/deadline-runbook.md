@@ -1,5 +1,58 @@
 # Deadline-morning runbook
 
+## GW3 — Fri 2026-09-04, 17:30 UTC / 13:30 EDT
+
+State on the eve (2026-09-03 ~20:30 UTC): transcript cache warm for every
+creator with a GW3 video (52 fetched, 0 blocked, 6s pacing held), price
+snapshot taken, 14/18 creators resolved to a GW3 video, YouTube block lifted.
+Nothing has been extracted yet — extraction is tomorrow's first paid step.
+
+Owner context: 1 free transfer, £0.5m bank, both first-half wildcard and
+free hit unused (first-half chips expire after GW19). GW3 is the last
+gameweek before the international break; GW4's deadline is Sat 2026-09-12
+12:30 UTC, eight days later.
+
+### 1. Refresh the listing and read what extraction will select (free)
+
+```
+uv run python -m fpl_oracle.extract.run_extract --gameweek 3 --force-refresh --dry-run
+```
+
+`--force-refresh` is REQUIRED: without it the 6h uploads cache can hide a
+"final thoughts" video posted this morning. Read the list before spending.
+
+### 2. Extract, then solve
+
+PASS `--gameweek 3` EXPLICITLY on both commands (`is_next` flips to GW4 the
+moment the deadline passes).
+
+```
+uv run python -m fpl_oracle.extract.run_extract --gameweek 3 --force-refresh
+uv run python -m fpl_oracle.pipeline --gameweek 3 --force-refresh
+```
+
+Roughly 14 Claude extraction calls; re-running is safe (skip-if-recent).
+If a creator's transcript is missing and YouTube is blocking again, the
+fallback chain uses cached older videos; Gemini is available by hand via
+`ingest/gemini_transcripts.py`.
+
+### 3. Read this, in this order
+
+1. **`## This week's transfer`** — the one-free-transfer answer. Note the
+   line naming free-hit drafts kept out of this section (new for GW3).
+2. **`## Wildcard gap`** — one number for how far your squad sits from the
+   solver's £100m squad, in the same units as the transfer deltas, plus
+   how many of your 15 the solver keeps. This is the wildcard-or-not input.
+3. **`## Chip consensus`** — how many creators are wildcarding THIS week
+   versus later. Stated intentions only.
+4. **`data/extractions/match_quality.md`** — resolution per creator, and
+   the free-hit pick count per creator.
+
+The wildcard decision itself is yours. The report gives the gap, the
+room's timing split, and the transfer alternative; it does not price a chip.
+
+---
+
 ## GW2 — Fri 2026-08-28, 17:30 UTC / 13:30 EDT
 
 Do these in order. Steps 1-2 are free; step 3 is the only one that spends.
