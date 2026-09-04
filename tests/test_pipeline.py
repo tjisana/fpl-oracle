@@ -42,6 +42,7 @@ from fpl_oracle.pipeline import (
 )
 from fpl_oracle.report.models import NuanceRecord, SquadNuance
 from fpl_oracle.roster.models import Creator, Tier
+from fpl_oracle.solver.wildcard import WildcardGap
 
 
 def _fake_report_fn(**kwargs) -> str:
@@ -740,6 +741,8 @@ class TestBootstrapFetchedAt:
         assert record.counts.picks_free_hit_excluded_from_transfer == 0
         assert record.free_hit_sources == []
         assert record.chip_consensus is None
+        assert record.wildcard_gap is None
+        assert record.wildcard_note == ""
 
 
 class TestChipConsensusWiring:
@@ -1163,6 +1166,79 @@ class TestBuildPicksFreeHit:
         assert skipped == 1
         assert skipped_free_hit == 0
         assert picks_by_creator == {}
+
+
+# Wildcard gap: the owner's squad vs. the solver's £100m squad on the
+# solver's own coefficient yardstick. Depends on `my_squad_fn` the same
+# way the transfer recommendation does, so it mirrors TestMySquadWiring's
+# fixtures and pattern.
+# ---------------------------------------------------------------------------
+
+
+class TestWildcardGapWiring:
+    def test_no_owned_squad_leaves_wildcard_gap_none(self, tmp_path: Path) -> None:
+        db = _make_db(_legal_pool())
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[],
+            report_fn=_fake_report_fn,
+            allow_no_evidence=True,
+            my_squad_fn=None,  # keep this test network-free
+        )
+
+        assert result.record.wildcard_gap is None
+        assert result.record.wildcard_note == "no owned squad available — wildcard gap skipped"
+
+    def test_injected_my_squad_fn_populates_wildcard_gap(self, tmp_path: Path) -> None:
+        db = _make_db(_legal_pool())
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[],
+            report_fn=_fake_report_fn,
+            allow_no_evidence=True,
+            my_squad_fn=lambda player_db: (_fake_my_squad_summary(), "fetched squad for GW1"),
+        )
+
+        gap = result.record.wildcard_gap
+        assert gap is not None
+        assert gap.kept_count == len(gap.kept_player_ids)
+        assert gap.changes_needed == len(result.squad.players) - gap.kept_count
+        assert gap.gain == pytest.approx(gap.solver_objective - gap.my_objective)
+        # team_value on the fake summary is 1000 tenths of a million (£100.0m).
+        assert gap.my_squad_value_m == pytest.approx(100.0)
+        assert gap.solver_squad_cost_m == pytest.approx(result.squad.total_cost_m)
+        assert result.record.wildcard_note == (
+            f"gap {gap.gain:+.2f}; solver keeps {gap.kept_count}/15"
+        )
+
+    def test_wildcard_gap_raising_is_non_fatal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def failing_wildcard_gap(**kwargs: object) -> WildcardGap:
+            raise RuntimeError("wildcard blew up")
+
+        monkeypatch.setattr(pipeline, "wildcard_gap", failing_wildcard_gap)
+
+        result = run_pipeline(
+            extractions_dir=tmp_path / "missing",
+            runs_dir=tmp_path / "runs",
+            player_db=_make_db(_legal_pool()),
+            registry=[],
+            report_fn=_fake_report_fn,
+            allow_no_evidence=True,
+            my_squad_fn=lambda player_db: (_fake_my_squad_summary(), "fetched squad for GW1"),
+        )
+
+        assert result.record.wildcard_gap is None
+        assert "wildcard blew up" in result.record.wildcard_note
+        assert result.report_path is not None
+        assert (result.run_dir / "run.json").exists()
 
 
 class TestPipelineResultDiffAndAvailability:

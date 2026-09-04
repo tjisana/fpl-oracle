@@ -1041,6 +1041,70 @@ def _render_transfer(record: RunRecord, creators_by_id: dict[str, str]) -> list[
     return lines
 
 
+# Above this, `transfers_equivalent` reads as a real number of transfers.
+# Beyond it the ratio is no longer a meaningful count (a tiny or zero
+# best-single-transfer delta blows the ratio up) so it's capped in the
+# prose rather than printed as a large, spuriously precise number.
+_TRANSFERS_EQUIVALENT_CAP = 20
+
+
+def _render_wildcard_gap(record: RunRecord, db: PlayerDB) -> list[str]:
+    """How far the owner's actual squad sits from the solver's £100m
+    squad, on the same coefficient yardstick the transfer section above
+    uses. Observational — see `solver.wildcard`."""
+    gap = record.wildcard_gap
+    if gap is None:
+        return []
+
+    sentence = (
+        f"The solver's £100m squad (£{gap.solver_squad_cost_m:.1f}m) scores "
+        f"**{gap.solver_objective:.2f}** against **{gap.my_objective:.2f}** for the squad "
+        f"you own (£{gap.my_squad_value_m:.1f}m), a gap of **{gap.gain:+.2f}** on the same "
+        "yardstick as the transfer deltas above."
+    )
+    if gap.gain <= 0:
+        sentence += (
+            " Your squad already scores at or above the solver's on this yardstick; a "
+            "wildcard buys nothing the consensus can see."
+        )
+    elif gap.transfers_equivalent is not None:
+        equivalent_text = (
+            f"more than {_TRANSFERS_EQUIVALENT_CAP}"
+            if gap.transfers_equivalent > _TRANSFERS_EQUIVALENT_CAP
+            else f"{gap.transfers_equivalent:.1f}"
+        )
+        sentence += (
+            f" Your best single transfer is worth {gap.best_single_transfer_delta:+.2f}, "
+            f"so the wildcard buys roughly {equivalent_text} transfers' worth of consensus."
+        )
+
+    if gap.kept_count == 0:
+        sentence += " The solver would keep 0 of your 15."
+    else:
+        kept_names = ", ".join(_player_name(db, pid) for pid in gap.kept_player_ids)
+        sentence += f" The solver would keep {gap.kept_count} of your 15: {kept_names}."
+
+    if gap.unbacked_owned_ids:
+        unbacked_names = ", ".join(_player_name(db, pid) for pid in gap.unbacked_owned_ids)
+        sentence += f" Owned players with no creator backing this week: {unbacked_names}."
+    else:
+        sentence += " Owned players with no creator backing this week: none."
+
+    return [
+        "## Wildcard gap",
+        "",
+        sentence,
+        "",
+        (
+            "_Consensus support, not points. Whether a first-half wildcard is worth "
+            "spending now is your call; this says how far your squad sits from where "
+            "the creators are converging. Price carries most of this yardstick, so a "
+            "squad worth more than £100m starts ahead before consensus is counted._"
+        ),
+        "",
+    ]
+
+
 def render_report(
     *,
     record: RunRecord,
@@ -1072,6 +1136,7 @@ def render_report(
     lines: list[str] = []
     lines += _render_header(record, squad, extractions)
     lines += _render_transfer(record, creators_by_id)
+    lines += _render_wildcard_gap(record, db)
     lines += _render_chip_consensus(record, creators_by_id)
     lines += _render_diff(diff, db)
     lines += _render_availability_callout(squad, availability, db)
