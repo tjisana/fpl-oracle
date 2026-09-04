@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fpl_oracle.consensus.captaincy import CaptainCandidate, CaptaincyElection
+from fpl_oracle.consensus.chips import ChipConsensus, ChipTally, ChipVote
 from fpl_oracle.consensus.scoring import CreatorVote, PlayerScore
 from fpl_oracle.extract.run_extract import ResolvedExtraction
-from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
+from fpl_oracle.extract.schemas import Chip, Pick, PickAction, Provenance, VideoExtraction
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict
 from fpl_oracle.fpl.players import Player, PlayerDB, Position
 from fpl_oracle.pipeline import (
@@ -121,6 +122,7 @@ def _record(
     picks_free_hit_excluded_from_transfer: int = 0,
     free_hit_sources: list[str] | None = None,
     transfer_recommendation: TransferRecommendation | None = None,
+    chip_consensus: ChipConsensus | None = None,
 ) -> RunRecord:
     return RunRecord(
         run_id="20260819T120000Z-abc1234",
@@ -133,6 +135,7 @@ def _record(
         inputs=inputs or [],
         creator_weights=creator_weights or {},
         excluded_players=excluded_players or [],
+        chip_consensus=chip_consensus,
         counts=RunCounts(
             extractions_loaded=1,
             picks_used=2,
@@ -1250,3 +1253,233 @@ class TestDiffSection:
             diff=diff,
         )
         assert "No previous run to diff against" in report
+
+
+# ---------------------------------------------------------------------------
+# Chip consensus section.
+# ---------------------------------------------------------------------------
+
+
+def _chip_vote(
+    creator_id: str,
+    weight: float = 1.0,
+    chip: Chip = Chip.WILDCARD,
+    target_gameweek: int | None = None,
+    conviction: int = 4,
+    provenance: Provenance = Provenance.PERSONAL,
+    reasoning: str = "test reasoning",
+) -> ChipVote:
+    return ChipVote(
+        creator_id=creator_id,
+        creator_weight=weight,
+        chip=chip,
+        target_gameweek=target_gameweek,
+        conviction=conviction,
+        provenance=provenance,
+        reasoning=reasoning,
+    )
+
+
+def _chip_tally(
+    chip: Chip,
+    this_gameweek: list[ChipVote] | None = None,
+    later: list[ChipVote] | None = None,
+    unspecified: list[ChipVote] | None = None,
+    this_gameweek_weight: float = 0.0,
+    this_gameweek_share: float = 0.0,
+) -> ChipTally:
+    return ChipTally(
+        chip=chip,
+        this_gameweek=this_gameweek or [],
+        later=later or [],
+        unspecified=unspecified or [],
+        this_gameweek_weight=this_gameweek_weight,
+        this_gameweek_share=this_gameweek_share,
+    )
+
+
+def _chip_consensus(
+    gameweek: int | None,
+    tallies: list[ChipTally] | None = None,
+    contributing_creators: int = 0,
+    contributing_weight: float = 0.0,
+    creators_with_plans: int = 0,
+    stale: list[ChipVote] | None = None,
+) -> ChipConsensus:
+    if tallies is None:
+        tallies = [_chip_tally(chip) for chip in Chip]
+    return ChipConsensus(
+        gameweek=gameweek,
+        contributing_creators=contributing_creators,
+        contributing_weight=contributing_weight,
+        creators_with_plans=creators_with_plans,
+        tallies=tallies,
+        stale=stale or [],
+    )
+
+
+def _render_with_chip_consensus(
+    chip_consensus: ChipConsensus | None, creators: list[Creator] | None = None
+) -> str:
+    pool = _basic_pool()
+    db = _db(pool)
+    squad = _basic_squad(pool)
+    return render_report(
+        record=_record(chip_consensus=chip_consensus),
+        squad=squad,
+        scores={},
+        election=_empty_election(),
+        db=db,
+        extractions=[],
+        creators=creators or [],
+    )
+
+
+class TestChipConsensusSection:
+    def test_absent_when_chip_consensus_is_none(self) -> None:
+        report = _render_with_chip_consensus(None)
+        assert "Chip consensus" not in report
+
+    def test_zero_plans_renders_italic_line_and_no_table(self) -> None:
+        consensus = _chip_consensus(gameweek=3, contributing_creators=5, creators_with_plans=0)
+        report = _render_with_chip_consensus(consensus)
+        assert "## Chip consensus — GW3" in report
+        assert "_No creator stated a chip intention this week._" in report
+        assert "| Chip |" not in report
+
+    def test_stale_line_appears_even_when_creators_with_plans_is_zero(self) -> None:
+        """The zero-plans early return must not swallow the stale note —
+        a run where every plan was past-dated should still say so, not
+        silently say nothing was stated at all."""
+        consensus = _chip_consensus(
+            gameweek=3,
+            contributing_creators=1,
+            creators_with_plans=0,
+            stale=[_chip_vote("late_alice", target_gameweek=1)],
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert "_No creator stated a chip intention this week._" in report
+        assert "_Ignored as past-dated: 1 plan(s) targeting an earlier gameweek._" in report
+        assert "| Chip |" not in report
+
+    def test_chip_missing_from_display_name_map_falls_back_to_enum_value(self, monkeypatch) -> None:
+        """A new `Chip` member FPL adds/renames a chip set mid-season
+        must not KeyError out of the whole report — it renders under its
+        raw enum value instead."""
+        monkeypatch.setattr(gameweek_mod, "_CHIP_DISPLAY_NAMES", {})
+        consensus = _chip_consensus(
+            gameweek=3, contributing_creators=1, contributing_weight=1.0, creators_with_plans=1
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert f"| {Chip.WILDCARD.value} |" in report
+
+    def test_names_share_and_group_marker(self) -> None:
+        tallies = [
+            _chip_tally(
+                Chip.WILDCARD,
+                this_gameweek=[
+                    _chip_vote("andy", weight=0.6, target_gameweek=3),
+                    _chip_vote(
+                        "salah_group",
+                        weight=0.4,
+                        target_gameweek=3,
+                        provenance=Provenance.GROUP,
+                    ),
+                ],
+                this_gameweek_weight=1.0,
+                this_gameweek_share=1.0,
+            ),
+            _chip_tally(Chip.FREE_HIT),
+            _chip_tally(Chip.BENCH_BOOST),
+            _chip_tally(Chip.TRIPLE_CAPTAIN),
+        ]
+        consensus = _chip_consensus(
+            gameweek=3,
+            tallies=tallies,
+            contributing_creators=2,
+            contributing_weight=1.0,
+            creators_with_plans=2,
+        )
+        creators = [
+            _creator("andy", "Andy Analyst"),
+            _creator("salah_group", "FPL Salah"),
+        ]
+        report = _render_with_chip_consensus(consensus, creators)
+        assert "**2** (100% of weight): Andy Analyst, FPL Salah (group)" in report
+        assert "Andy Analyst (group)" not in report
+
+    def test_later_column_groups_by_gameweek(self) -> None:
+        tallies = [
+            _chip_tally(
+                Chip.WILDCARD,
+                later=[
+                    _chip_vote("tips", weight=0.3, target_gameweek=5),
+                    _chip_vote("harry", weight=0.2, target_gameweek=6),
+                    _chip_vote("raptor", weight=0.2, target_gameweek=6),
+                ],
+            ),
+            _chip_tally(Chip.FREE_HIT),
+            _chip_tally(Chip.BENCH_BOOST),
+            _chip_tally(Chip.TRIPLE_CAPTAIN),
+        ]
+        consensus = _chip_consensus(
+            gameweek=3,
+            tallies=tallies,
+            contributing_creators=3,
+            contributing_weight=0.7,
+            creators_with_plans=3,
+        )
+        creators = [
+            _creator("tips", "FPLtips"),
+            _creator("harry", "FPL Harry"),
+            _creator("raptor", "FPL Raptor"),
+        ]
+        report = _render_with_chip_consensus(consensus, creators)
+        assert "GW5: FPLtips · GW6: FPL Harry, FPL Raptor" in report
+
+    def test_empty_bucket_renders_em_dash(self) -> None:
+        consensus = _chip_consensus(
+            gameweek=3, contributing_creators=1, contributing_weight=1.0, creators_with_plans=1
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert "| Wildcard | — | — | — |" in report
+
+    def test_stale_line_appears_when_stale_present(self) -> None:
+        tallies = [_chip_tally(chip) for chip in Chip]
+        consensus = _chip_consensus(
+            gameweek=3,
+            tallies=tallies,
+            contributing_creators=1,
+            contributing_weight=1.0,
+            creators_with_plans=1,
+            stale=[_chip_vote("late_alice", target_gameweek=1)],
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert "_Ignored as past-dated: 1 plan(s) targeting an earlier gameweek._" in report
+
+    def test_no_stale_line_when_stale_is_empty(self) -> None:
+        tallies = [_chip_tally(chip) for chip in Chip]
+        consensus = _chip_consensus(
+            gameweek=3,
+            tallies=tallies,
+            contributing_creators=1,
+            contributing_weight=1.0,
+            creators_with_plans=1,
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert "Ignored as past-dated" not in report
+
+    def test_header_falls_back_when_gameweek_is_none(self) -> None:
+        tallies = [_chip_tally(chip) for chip in Chip]
+        consensus = _chip_consensus(
+            gameweek=None,
+            tallies=tallies,
+            contributing_creators=1,
+            contributing_weight=1.0,
+            creators_with_plans=1,
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert "## Chip consensus\n" in report
+        assert "## Chip consensus —" not in report
+        # This-gameweek column reads em-dash for every row when gameweek is None.
+        assert "| Wildcard | — |" in report
