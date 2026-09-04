@@ -32,6 +32,7 @@ from fpl_oracle.pipeline import (
 )
 from fpl_oracle.report.models import NuanceRecord, SquadNuance
 from fpl_oracle.roster.models import Creator, Tier
+from fpl_oracle.solver.wildcard import WildcardGap
 
 
 def _fake_report_fn(**kwargs) -> str:
@@ -943,6 +944,9 @@ class TestWildcardGapWiring:
         assert gap.kept_count == len(gap.kept_player_ids)
         assert gap.changes_needed == len(result.squad.players) - gap.kept_count
         assert gap.gain == pytest.approx(gap.solver_objective - gap.my_objective)
+        # team_value on the fake summary is 1000 tenths of a million (£100.0m).
+        assert gap.my_squad_value_m == pytest.approx(100.0)
+        assert gap.solver_squad_cost_m == pytest.approx(result.squad.total_cost_m)
         assert result.record.wildcard_note == (
             f"gap {gap.gain:+.2f}; solver keeps {gap.kept_count}/15"
         )
@@ -950,7 +954,7 @@ class TestWildcardGapWiring:
     def test_wildcard_gap_raising_is_non_fatal(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def failing_wildcard_gap(**kwargs):
+        def failing_wildcard_gap(**kwargs: object) -> WildcardGap:
             raise RuntimeError("wildcard blew up")
 
         monkeypatch.setattr(pipeline, "wildcard_gap", failing_wildcard_gap)

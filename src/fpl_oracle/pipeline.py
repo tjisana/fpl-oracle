@@ -276,9 +276,9 @@ class RunRecord(BaseModel):
     wildcard_gap: WildcardGap | None = Field(
         default=None,
         description=(
-            "the owner's squad vs the solver's £100m squad on the solver's own objective "
-            "(price + consensus, availability-scaled, bench at BENCH_WEIGHT). Observational. "
-            "Defaults to None so older run.json files parse."
+            "the owner's squad vs the solver's £100m squad on the transfer section's "
+            "yardstick (starters 1.0, bench BENCH_WEIGHT). Observational. Defaults to "
+            "None so older run.json files parse."
         ),
     )
     wildcard_note: str = Field(
@@ -1050,9 +1050,10 @@ def run_pipeline(
             logger.warning("pipeline: transfer recommendation failed: %s", e)
             transfer_note = f"transfer recommendation failed: {e}"
 
-    # How far the owner's actual squad sits from the solver's own £100m
-    # answer, on the solver's own yardstick. Depends on `transfer_rec` for
-    # the transfers-equivalent conversion, so it runs after that block.
+    # How far the owner's actual squad sits from the solver's £100m
+    # answer, on the transfer section's yardstick. Depends on
+    # `transfer_rec` for the transfers-equivalent conversion, so it runs
+    # after that block.
     wildcard: WildcardGap | None = None
     wildcard_note = "no owned squad available — wildcard gap skipped"
     if my_squad_summary is not None:
@@ -1064,6 +1065,7 @@ def run_pipeline(
                 scores=scores,
                 verdicts=availability.verdicts,
                 transfer_rec=transfer_rec,
+                my_squad_value_m=my_squad_summary.team_value / 10,
             )
             wildcard_note = f"gap {wildcard.gain:+.2f}; solver keeps {wildcard.kept_count}/15"
         except Exception as e:  # noqa: BLE001 - never cost the run its squad

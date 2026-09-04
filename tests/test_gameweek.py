@@ -1148,18 +1148,23 @@ def _wildcard_gap(
     *,
     my_objective: float = 99.12,
     solver_objective: float = 101.84,
+    my_squad_value_m: float = 100.1,
+    solver_squad_cost_m: float = 99.8,
     best_single_transfer_delta: float | None = 0.62,
     transfers_equivalent: float | None = 4.4,
     kept_player_ids: list[int] | None = None,
     unbacked_owned_ids: list[int] | None = None,
 ) -> WildcardGap:
     kept = kept_player_ids if kept_player_ids is not None else [1, 2]
+    gain = solver_objective - my_objective
     return WildcardGap(
         my_objective=my_objective,
         solver_objective=solver_objective,
-        gain=solver_objective - my_objective,
+        gain=gain,
+        my_squad_value_m=my_squad_value_m,
+        solver_squad_cost_m=solver_squad_cost_m,
         best_single_transfer_delta=best_single_transfer_delta,
-        transfers_equivalent=transfers_equivalent,
+        transfers_equivalent=transfers_equivalent if gain > 0 else None,
         kept_player_ids=kept,
         kept_count=len(kept),
         changes_needed=15 - len(kept),
@@ -1206,12 +1211,15 @@ class TestWildcardGapSection:
         assert "**101.84**" in report
         assert "**99.12**" in report
         assert "**+2.72**" in report
+        assert "£99.8m" in report
+        assert "£100.1m" in report
         assert "+0.62" in report
         assert "4.4 transfers" in report
         assert pool[0].web_name in report
         assert pool[1].web_name in report
         assert "The solver would keep 1 of your 15" in report
         assert "Owned players with no creator backing this week:" in report
+        assert "Price carries most of this yardstick" in report
 
     def test_omits_best_transfer_sentence_when_transfers_equivalent_none(self) -> None:
         pool = _basic_pool()
@@ -1228,6 +1236,48 @@ class TestWildcardGapSection:
             creators=[],
         )
         assert "transfers' worth of consensus" not in report
+
+    def test_non_positive_gain_renders_nothing_to_buy_sentence(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        gap = _wildcard_gap(my_objective=101.0, solver_objective=99.0)
+        report = render_report(
+            record=_record(wildcard_gap=gap),
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[],
+        )
+        assert (
+            "Your squad already scores at or above the solver's on this yardstick; a "
+            "wildcard buys nothing the consensus can see." in report
+        )
+        assert "transfers' worth of consensus" not in report
+
+    def test_transfers_equivalent_over_cap_renders_more_than_phrasing(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        gap = _wildcard_gap(
+            my_objective=90.0,
+            solver_objective=100.0,
+            best_single_transfer_delta=0.01,
+            transfers_equivalent=1000.0,
+        )
+        report = render_report(
+            record=_record(wildcard_gap=gap),
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[],
+        )
+        assert "more than 20 transfers' worth of consensus" in report
+        assert "1000.0 transfers" not in report
 
     def test_zero_kept_renders_without_a_name_list(self) -> None:
         gap = _wildcard_gap(kept_player_ids=[])
