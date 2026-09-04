@@ -15,12 +15,14 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from fpl_oracle import pipeline
+from fpl_oracle.consensus.scoring import PlayerScore
 from fpl_oracle.extract.run_extract import ResolvedExtraction
-from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, VideoExtraction
+from fpl_oracle.extract.schemas import Pick, PickAction, Provenance, SquadContext, VideoExtraction
 from fpl_oracle.fpl.client import EntrySummary
 from fpl_oracle.fpl.players import Player, PlayerDB, Position
 from fpl_oracle.pipeline import (
@@ -98,7 +100,10 @@ def _creator(creator_id: str) -> Creator:
 
 
 def _pick(
-    player_id: int | None, action: PickAction = PickAction.SQUAD_INCLUDE, conviction: int = 5
+    player_id: int | None,
+    action: PickAction = PickAction.SQUAD_INCLUDE,
+    conviction: int = 5,
+    squad_context: SquadContext | None = None,
 ) -> Pick:
     return Pick(
         player_name_raw="Some Player",
@@ -110,6 +115,7 @@ def _pick(
         time_horizon=1,
         reasoning="test",
         provenance=Provenance.PERSONAL,
+        squad_context=squad_context,
     )
 
 
@@ -705,6 +711,8 @@ class TestBootstrapFetchedAt:
         assert record.inputs[0].published_at is None
         assert record.my_squad is None
         assert record.my_squad_note == ""
+        assert record.counts.picks_free_hit_excluded_from_transfer == 0
+        assert record.free_hit_sources == []
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +904,181 @@ class TestMySquadWiring:
         with_my_squad_ids = {p.player_id for p in with_my_squad.squad.players}
         assert baseline_ids == with_my_squad_ids
         assert baseline.record.solver == with_my_squad.record.solver
+
+
+# ---------------------------------------------------------------------------
+# Free-hit guard: a free-hit draft is a one-gameweek fixture play that
+# reverts afterwards, so it must not be read as a lasting endorsement by
+# the in-season transfer recommender (which advises PERMANENT moves). The
+# £100m solver still sees it — "who is good this week" is real signal for
+# the wildcard/free-hit answer — so only the SCORES handed to
+# `_recommend_transfer_for` are affected, never `result.scores` or the
+# solved squad itself.
+# ---------------------------------------------------------------------------
+
+
+class TestFreeHitExclusionFromTransfer:
+    def test_free_hit_picks_excluded_from_transfer_scores_but_not_squad(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        extractions_dir = tmp_path / "extractions"
+        extractions_dir.mkdir()
+        _write_extraction(
+            extractions_dir,
+            "andy",
+            "v1",
+            [
+                _pick(1, squad_context=SquadContext.FREE_HIT),
+                _pick(2, squad_context=SquadContext.OWN_TEAM),
+            ],
+        )
+        db = _make_db(_legal_pool())
+
+        captured: dict[str, object] = {}
+
+        def fake_recommend_transfer_for(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(pipeline, "_recommend_transfer_for", fake_recommend_transfer_for)
+
+        result = run_pipeline(
+            extractions_dir=extractions_dir,
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[_creator("andy")],
+            report_fn=_fake_report_fn,
+            my_squad_fn=lambda player_db: (_fake_my_squad_summary(), "fetched squad for GW1"),
+        )
+
+        # The solver's evidence keeps the free-hit pick: player 1 is backed.
+        assert result.scores[1].backers >= 1
+        # The transfer recommender's evidence does not: player 1 got no
+        # votes once the free-hit pick was dropped, so score_picks never
+        # created an entry for it.
+        transfer_scores = cast("dict[int, PlayerScore]", captured["scores"])
+        assert 1 not in transfer_scores
+        assert 2 in transfer_scores
+
+        assert result.record.counts.picks_free_hit_excluded_from_transfer == 1
+        assert result.record.free_hit_sources == ["andy"]
+
+    def test_transfer_recommender_gets_the_same_scores_object_when_no_free_hit_picks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No free-hit picks anywhere -> a second `score_picks` call would
+        only re-normalise the same votes to the same numbers, so the
+        transfer recommender is handed `result.scores` itself (identity),
+        not a recomputed equal-but-different dict.
+
+        NOTE: `result.scores` cannot be compared by `is` directly —
+        `PipelineResult` is itself a Pydantic model, and constructing it
+        rebuilds the outer `dict[int, PlayerScore]` container even when
+        every value is passed through unchanged (verified: Pydantic
+        preserves the nested `PlayerScore` instances by identity but not
+        the containing dict). So the guarantee is checked two ways: the
+        `PlayerScore` values `_recommend_transfer_for` received are the
+        exact same instances as `result.scores`' values, and `score_picks`
+        itself was only called once (proving `transfer_scores` was never
+        independently recomputed)."""
+        extractions_dir = tmp_path / "extractions"
+        extractions_dir.mkdir()
+        _write_extraction(
+            extractions_dir, "andy", "v1", [_pick(1, squad_context=SquadContext.OWN_TEAM)]
+        )
+        db = _make_db(_legal_pool())
+
+        captured: dict[str, object] = {}
+        score_picks_calls = 0
+        real_score_picks = pipeline.score_picks
+
+        def counting_score_picks(*args, **kwargs):
+            nonlocal score_picks_calls
+            score_picks_calls += 1
+            return real_score_picks(*args, **kwargs)
+
+        def fake_recommend_transfer_for(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(pipeline, "_recommend_transfer_for", fake_recommend_transfer_for)
+        monkeypatch.setattr(pipeline, "score_picks", counting_score_picks)
+
+        result = run_pipeline(
+            extractions_dir=extractions_dir,
+            runs_dir=tmp_path / "runs",
+            player_db=db,
+            registry=[_creator("andy")],
+            report_fn=_fake_report_fn,
+            my_squad_fn=lambda player_db: (_fake_my_squad_summary(), "fetched squad for GW1"),
+        )
+
+        assert score_picks_calls == 1
+        transfer_scores = cast("dict[int, PlayerScore]", captured["scores"])
+        assert set(transfer_scores) == set(result.scores)
+        assert all(transfer_scores[pid] is result.scores[pid] for pid in result.scores)
+        assert result.record.counts.picks_free_hit_excluded_from_transfer == 0
+        assert result.record.free_hit_sources == []
+
+
+class TestBuildPicksFreeHit:
+    """Unit tests for `_build_picks` directly — the free-hit-drop flag and
+    the ordering rule (unresolved is checked BEFORE free-hit, so an
+    unresolved free-hit pick is never double counted)."""
+
+    def _loaded(
+        self, picks: list[Pick], creator_id: str = "alice"
+    ) -> list[tuple[Path, bytes, ResolvedExtraction]]:
+        extraction = VideoExtraction(
+            creator_id=creator_id,
+            video_id="v1",
+            video_title="Test video",
+            published_at=datetime(2026, 8, 1, tzinfo=UTC),
+            gameweek=1,
+            picks=picks,
+        )
+        resolved = ResolvedExtraction(extraction=extraction, resolutions=[])
+        return [(Path("v1.json"), b"{}", resolved)]
+
+    def test_default_keeps_free_hit_picks(self) -> None:
+        loaded = self._loaded(
+            [
+                _pick(1, squad_context=SquadContext.FREE_HIT),
+                _pick(2, squad_context=SquadContext.OWN_TEAM),
+                _pick(3, squad_context=SquadContext.WILDCARD),
+                _pick(4, squad_context=None),
+            ]
+        )
+        picks_by_creator, used, skipped, skipped_free_hit = pipeline._build_picks(loaded)
+        assert used == 4
+        assert skipped == 0
+        assert skipped_free_hit == 0
+        assert {pid for pid, _, _ in picks_by_creator["alice"]} == {1, 2, 3, 4}
+
+    def test_include_free_hit_false_drops_only_free_hit(self) -> None:
+        loaded = self._loaded(
+            [
+                _pick(1, squad_context=SquadContext.FREE_HIT),
+                _pick(2, squad_context=SquadContext.OWN_TEAM),
+                _pick(3, squad_context=SquadContext.WILDCARD),
+                _pick(4, squad_context=None),
+            ]
+        )
+        picks_by_creator, used, skipped, skipped_free_hit = pipeline._build_picks(
+            loaded, include_free_hit=False
+        )
+        assert used == 3
+        assert skipped == 0
+        assert skipped_free_hit == 1
+        assert {pid for pid, _, _ in picks_by_creator["alice"]} == {2, 3, 4}
+
+    def test_unresolved_free_hit_pick_counts_as_unresolved_not_free_hit(self) -> None:
+        loaded = self._loaded([_pick(None, squad_context=SquadContext.FREE_HIT)])
+        picks_by_creator, used, skipped, skipped_free_hit = pipeline._build_picks(
+            loaded, include_free_hit=False
+        )
+        assert used == 0
+        assert skipped == 1
+        assert skipped_free_hit == 0
+        assert picks_by_creator == {}
 
 
 class TestPipelineResultDiffAndAvailability:

@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from youtube_transcript_api import RequestBlocked, YouTubeRequestFailed
 
 from fpl_oracle.extract.extractor import ExtractionError, extract_picks
-from fpl_oracle.extract.schemas import VideoExtraction
+from fpl_oracle.extract.schemas import SquadContext, VideoExtraction
 from fpl_oracle.fpl.players import MatchStatus, PlayerDB
 from fpl_oracle.ingest.run_ingest import (
     eligible_creators,
@@ -452,12 +452,14 @@ def render_match_quality(resolved: list[ResolvedExtraction], gameweek: int) -> s
         total += len(r.resolutions)
         matched += n_matched
         gw_flag = "" if e.gameweek in (gameweek, None) else " — **WRONG GAMEWEEK?**"
+        n_free_hit = sum(1 for pick in e.picks if pick.squad_context is SquadContext.FREE_HIT)
+        free_hit_flag = f", free-hit picks: {n_free_hit}" if n_free_hit > 0 else ""
         lines += [
             f"## {e.creator_id} — {e.video_title} (`{e.video_id}`)",
             "",
             (
                 f"- Picks: {len(r.resolutions)}, matched: {n_matched}, "
-                f"gameweek: {e.gameweek}{gw_flag}"
+                f"gameweek: {e.gameweek}{gw_flag}{free_hit_flag}"
             ),
         ]
         for res in r.resolutions:

@@ -17,12 +17,13 @@ from pydantic import ValidationError
 from fpl_oracle.extract import extractor
 from fpl_oracle.extract.extractor import (
     ExtractionError,
+    _to_strict,
     _WireExtraction,
     _WirePick,
     build_user_message,
     extract_picks,
 )
-from fpl_oracle.extract.schemas import Pick
+from fpl_oracle.extract.schemas import Pick, SquadContext
 
 WIRE_PICK = {
     "player_name_raw": "Sacca",
@@ -34,6 +35,7 @@ WIRE_PICK = {
     "reasoning": "Nailed on set pieces.",
     "provenance": "personal",
     "urgency": None,
+    "squad_context": None,
 }
 
 
@@ -93,6 +95,41 @@ def test_wire_schema_excludes_player_id():
     assert "player_id" not in _WirePick.model_fields
     # and the wire pick otherwise mirrors Pick's LLM-facing fields
     assert set(_WirePick.model_fields) == set(Pick.model_fields) - {"player_id"}
+
+
+def test_wire_pick_exposes_squad_context():
+    assert "squad_context" in _WirePick.model_fields
+    # required on the wire — the model must always emit it, `None` is a
+    # legal value but omitting the key entirely is not.
+    assert _WirePick.model_fields["squad_context"].is_required()
+
+
+def test_to_strict_carries_squad_context_through_a_value():
+    wire = _WireExtraction(
+        gameweek=1,
+        picks=[_WirePick.model_validate({**WIRE_PICK, "squad_context": "free_hit"})],
+        chip_plans=[],
+    )
+    extraction = _to_strict(
+        wire,
+        creator_id="c",
+        video_id="v",
+        video_title="t",
+        published_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    assert extraction.picks[0].squad_context is SquadContext.FREE_HIT
+
+
+def test_to_strict_carries_squad_context_through_none():
+    wire = _WireExtraction(gameweek=1, picks=[_WirePick.model_validate(WIRE_PICK)], chip_plans=[])
+    extraction = _to_strict(
+        wire,
+        creator_id="c",
+        video_id="v",
+        video_title="t",
+        published_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    assert extraction.picks[0].squad_context is None
 
 
 def test_pipeline_stamps_metadata_and_forces_player_id_none(monkeypatch):

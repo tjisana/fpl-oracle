@@ -254,6 +254,42 @@ def test_render_match_quality_lists_only_unresolved(db):
 # ---------------------------------------------------------------------------
 
 
+class TestRenderMatchQualityFreeHitCount:
+    """The per-creator match-quality line surfaces free-hit picks — the
+    human review surface tomorrow morning — but only when there are any,
+    to keep the common case (no free-hit content) noise-free."""
+
+    def test_free_hit_count_shown_when_positive(self, db):
+        r = resolve_extraction(
+            _extraction(
+                [_pick(squad_context="free_hit"), _pick(squad_context="own_team")], gameweek=2
+            ),
+            db,
+        )
+        report = render_match_quality([r], gameweek=2)
+        assert "free-hit picks: 1" in report
+
+    def test_free_hit_count_omitted_when_zero(self, db):
+        r = resolve_extraction(_extraction([_pick(squad_context="own_team")], gameweek=2), db)
+        report = render_match_quality([r], gameweek=2)
+        assert "free-hit picks" not in report
+
+    def test_free_hit_count_includes_unresolved_picks(self, db):
+        # K counts picks with squad_context FREE_HIT regardless of whether
+        # the name resolved — a free-hit draft with an unmatched player is
+        # still a free-hit draft.
+        r = resolve_extraction(
+            _extraction(
+                [_pick(squad_context="free_hit", player_name_raw="Ronaldinho", team_inferred=None)],
+                gameweek=2,
+            ),
+            db,
+        )
+        assert r.resolutions[0].status is not MatchStatus.MATCHED
+        report = render_match_quality([r], gameweek=2)
+        assert "free-hit picks: 1" in report
+
+
 class TestRenderMatchQualityWrongGameweekFlag:
     def test_mismatched_gameweek_is_flagged(self, db):
         # _extraction() defaults to gameweek=1; the report is rendered for GW2.
