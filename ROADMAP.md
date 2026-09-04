@@ -151,6 +151,12 @@ is it worth -4?" Different objective, much smaller search space.
 
 ## KNOWN ISSUES
 
+- [ ] **Default data paths are RELATIVE** (`data/...` in `ingest/`, `extract/`,
+      `fpl/`, `pipeline`). Any command run from a cwd other than the repo root
+      silently builds a parallel `data/` tree there — on 2026-09-03 a dry-run
+      from `data/extractions/` created `data/extractions/data/cache/` (201
+      files). Anchor defaults on the package/repo root (or an env var) and
+      delete the stray tree.
 - [ ] **YouTube IP-blocks under burst load** — harvesting ~34 transcripts in
       one go tripped an `IpBlocked` on 2026-08-27. Block was confirmed still
       active 3h30m+ later. `warm_cache` stops the run on the first block

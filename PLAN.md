@@ -307,6 +307,41 @@ issues, all fixed and tested. The ones worth remembering:
   invisible to the person reading the output. DOUBTFUL players (discounted, not vetoed —
   they legally reach the XI) are now surfaced in the tables and called out up top.
 
+### Wildcard week (GW3, added 2026-09-03)
+Most GW3 creator titles were wildcard or free-hit drafts, which the pipeline
+had no notion of. Three changes, each implemented from a written-out spec by
+the Sonnet implementer and reviewed fresh-context on Opus:
+- **Free-hit guard** — `Pick.squad_context` (own_team / wildcard / free_hit /
+  None; LLM-labelled via a new prompt section, default None so old files
+  parse). `pipeline._build_picks(include_free_hit=False)` builds a second
+  vote map; the transfer recommender is scored on `transfer_scores` (free-hit
+  picks out), while the solver and captaincy election keep ALL picks — a
+  free-hit draft is still "who is good this week", it is just not a lasting
+  endorsement. Recorded in `RunCounts.picks_free_hit_excluded_from_transfer`
+  + `RunRecord.free_hit_sources`; the report leads the transfer section with
+  the exclusion notice (on a wildcard week the withheld picks can be most
+  of the evidence, so it precedes the reasoning). Review found the prompt did
+  not cover a single squad presented as "free hit or wildcard, undecided" —
+  now labelled free_hit, since it may only last a week.
+- **Chip consensus** — `consensus/chips.py` tallies creators' own stated
+  `chip_plans` (already extracted since 2026-08-20, never read) per chip into
+  this-gameweek / later / unspecified / stale, one vote per (creator, chip)
+  by highest conviction. `RunRecord.chip_consensus`; report section before
+  the diff. Review fixes: stale-only runs still say what was ignored; an
+  unknown `Chip` member cannot KeyError the whole report.
+- **Wildcard gap** — `solver/wildcard.py` scores the owned 15 and the solver's
+  15 on the TRANSFER yardstick (coefficient × 1.0 starters / BENCH_WEIGHT
+  bench — deliberately NOT `Squad.objective`, which weighs starters 1.1), so
+  `gain / best single-transfer delta` is unit-consistent. Review caught that
+  the owner's `is_starting` is last week's submitted lineup while the
+  solver's XI is an argmax — a benched Haaland would swing the number by ~15
+  transfers' worth — so `best_xi()` re-optimises BOTH sides over legal
+  formations. Injured owned players (EXCLUDED, multiplier 0) count as dead
+  weight but are not reported as "unbacked". Both squads' £m values are shown
+  because price carries most of the yardstick.
+- Also fixed on the way: the 2026-08-28 runbook/roadmap were GW2-specific; a
+  GW3 section now leads the runbook.
+
 ## Later (post-GW1)
 - Weekly transfer recommender aware of my actual squad/budget/free transfers
   (in-season, score transfer advice within price bands — the "vacuum" problem
