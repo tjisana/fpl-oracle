@@ -208,6 +208,13 @@ class MySquadSummary(BaseModel):
     private_leagues: list[LeagueStanding] = Field(
         description="leagues.classic[]/leagues.h2h[] entries with league_type == 'x' only"
     )
+    started_event: int | None = Field(
+        default=None,
+        description=(
+            "the gameweek the manager's entry started; 1 for a season-long entrant. None "
+            "on run.json files written before this field existed."
+        ),
+    )
 
 
 class RunRecord(BaseModel):
@@ -823,6 +830,7 @@ def fetch_my_squad_summary(player_db: PlayerDB) -> tuple[MySquadSummary | None, 
         overall_rank = entry_summary.summary_overall_rank if entry_summary else None
         overall_points = entry_summary.summary_overall_points if entry_summary else None
         private_leagues = entry_summary.private_leagues if entry_summary else []
+        started_event = entry_summary.started_event if entry_summary else None
 
         summary = MySquadSummary(
             entry_id=entry_id,
@@ -836,6 +844,7 @@ def fetch_my_squad_summary(player_db: PlayerDB) -> tuple[MySquadSummary | None, 
             overall_rank=overall_rank,
             overall_points=overall_points,
             private_leagues=private_leagues,
+            started_event=started_event,
         )
         return summary, f"fetched squad for GW{gameweek}"
     except Exception as e:  # noqa: BLE001 - my-squad must never cost the run its squad
@@ -948,13 +957,20 @@ def _recommend_transfer_for(
     """
     owned_ids = [p.player_id for p in my_squad.players]
     owned = [player for player in (db.get(pid) for pid in owned_ids) if player is not None]
-    elements_by_id = {e["id"]: e for e in fpl_client.get_bootstrap_static().get("elements", [])}
+    bootstrap = fpl_client.get_bootstrap_static()
+    elements_by_id = {e["id"]: e for e in bootstrap.get("elements", [])}
+    current_event = next(
+        (e["id"] for e in bootstrap.get("events", []) if e.get("is_current")), None
+    )
     pricing = derive_squad_pricing(
         owned_player_ids=owned_ids,
         elements_by_id=elements_by_id,
         purchase_from_transfers=derive_purchase_prices(my_squad.entry_id).known,
         bank=my_squad.bank,
         reported_squad_value=my_squad.team_value,
+        squad_gameweek=my_squad.gameweek,
+        started_event=my_squad.started_event,
+        current_event=current_event,
     )
     return recommend_transfer(
         starting_player_ids={p.player_id for p in my_squad.players if p.is_starting},

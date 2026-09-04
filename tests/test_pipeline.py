@@ -744,6 +744,31 @@ class TestBootstrapFetchedAt:
         assert record.wildcard_gap is None
         assert record.wildcard_note == ""
 
+    def test_old_my_squad_json_without_started_event_still_parses(self) -> None:
+        """A real `my_squad` sub-object written before `started_event`
+        existed on `MySquadSummary` must still load, defaulting to None —
+        the pricing reconciliation then treats it the same as "unknown",
+        never as "started at GW1"."""
+        from fpl_oracle.pipeline import MySquadSummary
+
+        old_json = json.dumps(
+            {
+                "entry_id": 12345,
+                "team_name": "Test FC",
+                "gameweek": 1,
+                "players": [],
+                "bank": 5,
+                "team_value": 1000,
+                "free_transfers": 1,
+                "free_transfers_note": "test derivation",
+                "overall_rank": 50000,
+                "overall_points": 60,
+                "private_leagues": [],
+            }
+        )
+        summary = MySquadSummary.model_validate_json(old_json)
+        assert summary.started_event is None
+
 
 class TestChipConsensusWiring:
     """`record.chip_consensus` is computed via `consensus.chips.
@@ -854,6 +879,7 @@ def _fake_my_squad_summary():
                 rank_count=2,
             )
         ],
+        started_event=1,
     )
 
 
@@ -1659,3 +1685,41 @@ class TestFetchMySquadSummary:
 
         assert result is None
         assert "connection reset by peer" in note
+
+    def test_success_carries_started_event_from_the_entry_summary(self, monkeypatch) -> None:
+        """`MySquadSummary.started_event` is filled from
+        `entry_summary.started_event` — a mid-season entrant (e.g.
+        started_event=5) must round-trip onto the summary, since the
+        transfer recommender relies on it to flag season-start prices as
+        invalid purchase prices for such a manager."""
+        from fpl_oracle.fpl.entry import MySquad
+
+        monkeypatch.setenv("FPL_ENTRY_ID", "123")
+        monkeypatch.setattr(pipeline.fpl_client, "get_current_completed_gameweek", lambda: 1)
+        monkeypatch.setattr(
+            pipeline.fpl_client,
+            "get_entry",
+            lambda entry_id: _entry_summary(entry_id, team_name="Test FC").model_copy(
+                update={"started_event": 5}
+            ),
+        )
+        fake_squad = MySquad(
+            entry_id=123,
+            gameweek=1,
+            team_name="Test FC",
+            players=[_owned_player(1, Position.GK)],
+            bank=5,
+            team_value=1000,
+            free_transfers=1,
+            free_transfers_note="test derivation",
+        )
+        monkeypatch.setattr(
+            pipeline, "fetch_my_squad", lambda entry_id, gameweek, player_db: fake_squad
+        )
+        db = _make_db(_legal_pool())
+
+        result, note = pipeline.fetch_my_squad_summary(db)
+
+        assert result is not None
+        assert result.started_event == 5
+        assert "GW1" in note

@@ -7,6 +7,8 @@ can't prove, and treat "roll" as a real answer. These pin exactly that.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from fpl_oracle.consensus.scoring import PlayerScore
 from fpl_oracle.fpl.availability import Availability, AvailabilityVerdict
 from fpl_oracle.fpl.players import Player, Position
@@ -105,6 +107,12 @@ class TestSellingPriceRule:
 
 class TestReconciliation:
     def test_verified_when_totals_agree(self) -> None:
+        """Reconciliation runs against MARKET value (now_cost, here 76
+        with no rollback requested), not the derived selling total (75,
+        because a 1-tenth rise shares nothing). This is the fixed
+        contract from the GW2 bug: a reported value of 75 (matching
+        selling) must NOT verify, only 76 (matching market value) does —
+        see TestMarketValueReconciliation for the full regression."""
         from fpl_oracle.fpl.selling import derive_squad_pricing
 
         result = derive_squad_pricing(
@@ -112,10 +120,11 @@ class TestReconciliation:
             elements_by_id={1: {"now_cost": 76, "cost_change_start": 1}},
             purchase_from_transfers={},
             bank=0,
-            reported_squad_value=75,
+            reported_squad_value=76,
         )
         assert result.verified is True
         assert result.prices[1].selling_price == 75
+        assert result.market_value_at_deadline == 76
 
     def test_unverified_when_totals_disagree(self) -> None:
         from fpl_oracle.fpl.selling import derive_squad_pricing
@@ -142,6 +151,132 @@ class TestReconciliation:
         )
         assert result.prices[1].purchase_price == 78
         assert result.prices[1].source == "transfer-log"
+
+
+class TestMarketValueReconciliation:
+    """The GW2 bug: FPL's reported `entry_history.value` is squad MARKET
+    value at the gameweek's deadline (sum(now_cost at the deadline) +
+    bank) — NOT the derived selling total. `cost_change_event` only
+    recovers deadline prices when the squad being checked is for
+    bootstrap's CURRENT event, since it's defined as "change since the
+    current event's deadline".
+
+    Live proof: owner's GW2 squad (entry 6460595), reported value 1001,
+    bank 5. Selling total is 995 (995 + 5 == 1000 != 1001) — correct
+    anyway, because selling price is not what gets reconciled. now_cost
+    today sums to 996, because João Pedro rose +1 and Chiesa fell -1
+    AFTER the GW2 deadline and those moves cancel; rolling both back by
+    `cost_change_event` also gives 996, so 996 + 5 == 1001 matches too.
+
+    The fixture below: 13 filler players, untouched all season, plus
+    João Pedro (id 368, transferred in at 70) and Chiesa (id 14,
+    an initial-squad player bought at 341 via the transfer log for
+    simplicity)."""
+
+    FILLER_IDS: ClassVar[list[int]] = list(range(1, 14))
+    FILLER_NOW_COST = 45
+    OWNED_IDS: ClassVar[list[int]] = [368, 14, *FILLER_IDS]
+    PURCHASE_FROM_TRANSFERS: ClassVar[dict[int, int]] = {368: 70, 14: 341}
+
+    def _elements(self, *, chiesa_now_cost: int, chiesa_cost_change_event: int) -> dict[int, dict]:
+        elements = {
+            pid: {
+                "now_cost": self.FILLER_NOW_COST,
+                "cost_change_start": 0,
+                "cost_change_event": 0,
+            }
+            for pid in self.FILLER_IDS
+        }
+        elements[368] = {"now_cost": 71, "cost_change_event": 1}  # rose +1 post-deadline
+        elements[14] = {
+            "now_cost": chiesa_now_cost,
+            "cost_change_event": chiesa_cost_change_event,
+        }
+        return elements
+
+    def test_gw2_regression_market_value_reconciles_after_rollback(self) -> None:
+        from fpl_oracle.fpl.selling import derive_squad_pricing
+
+        elements = self._elements(chiesa_now_cost=340, chiesa_cost_change_event=-1)
+
+        result = derive_squad_pricing(
+            owned_player_ids=self.OWNED_IDS,
+            elements_by_id=elements,
+            purchase_from_transfers=self.PURCHASE_FROM_TRANSFERS,
+            bank=5,
+            reported_squad_value=1001,
+            squad_gameweek=2,
+            current_event=2,
+        )
+
+        assert sum(p.selling_price for p in result.prices.values()) == 995
+        assert result.adjusted_for_event_changes is True
+        assert result.market_value_at_deadline == 996
+        assert result.verified is True
+
+    def test_not_the_current_event_but_now_costs_happen_to_match(self) -> None:
+        from fpl_oracle.fpl.selling import derive_squad_pricing
+
+        elements = self._elements(chiesa_now_cost=340, chiesa_cost_change_event=-1)
+
+        result = derive_squad_pricing(
+            owned_player_ids=self.OWNED_IDS,
+            elements_by_id=elements,
+            purchase_from_transfers=self.PURCHASE_FROM_TRANSFERS,
+            bank=5,
+            reported_squad_value=1001,
+            squad_gameweek=2,
+            current_event=3,
+        )
+
+        # now_cost alone (no rollback, since squad_gameweek != current_event)
+        # sums to the same 996 here, so it still verifies — but NOT
+        # because a rollback happened.
+        assert result.adjusted_for_event_changes is False
+        assert result.market_value_at_deadline == 996
+        assert result.verified is True
+
+    def test_unadjusted_mismatch_when_post_deadline_moves_do_not_cancel(self) -> None:
+        from fpl_oracle.fpl.selling import derive_squad_pricing
+
+        # Chiesa's post-deadline fall is dropped: now_cost stayed at its
+        # deadline price of 341, so the now_cost sum no longer happens to
+        # match, and current_event != squad_gameweek means it can't be
+        # rolled back either.
+        elements = self._elements(chiesa_now_cost=341, chiesa_cost_change_event=0)
+
+        result = derive_squad_pricing(
+            owned_player_ids=self.OWNED_IDS,
+            elements_by_id=elements,
+            purchase_from_transfers=self.PURCHASE_FROM_TRANSFERS,
+            bank=5,
+            reported_squad_value=1001,
+            squad_gameweek=2,
+            current_event=3,
+        )
+
+        assert result.verified is False
+        assert "could not be rolled back" in result.note
+        assert "GW2" in result.note
+        assert "GW3" in result.note
+
+    def test_mid_season_entrant_unverified_even_when_totals_match(self) -> None:
+        from fpl_oracle.fpl.selling import derive_squad_pricing
+
+        result = derive_squad_pricing(
+            owned_player_ids=[1],
+            elements_by_id={1: {"now_cost": 76, "cost_change_start": 1, "cost_change_event": 0}},
+            purchase_from_transfers={},
+            bank=0,
+            reported_squad_value=76,
+            squad_gameweek=5,
+            current_event=5,
+            started_event=5,
+        )
+
+        assert result.verified is False
+        assert "UNVERIFIED" in result.note
+        assert "GW5" in result.note
 
 
 class TestLegality:
