@@ -1234,6 +1234,32 @@ class TestChipConsensusSection:
         assert "_No creator stated a chip intention this week._" in report
         assert "| Chip |" not in report
 
+    def test_stale_line_appears_even_when_creators_with_plans_is_zero(self) -> None:
+        """The zero-plans early return must not swallow the stale note —
+        a run where every plan was past-dated should still say so, not
+        silently say nothing was stated at all."""
+        consensus = _chip_consensus(
+            gameweek=3,
+            contributing_creators=1,
+            creators_with_plans=0,
+            stale=[_chip_vote("late_alice", target_gameweek=1)],
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert "_No creator stated a chip intention this week._" in report
+        assert "_Ignored as past-dated: 1 plan(s) targeting an earlier gameweek._" in report
+        assert "| Chip |" not in report
+
+    def test_chip_missing_from_display_name_map_falls_back_to_enum_value(self, monkeypatch) -> None:
+        """A new `Chip` member FPL adds/renames a chip set mid-season
+        must not KeyError out of the whole report — it renders under its
+        raw enum value instead."""
+        monkeypatch.setattr(gameweek_mod, "_CHIP_DISPLAY_NAMES", {})
+        consensus = _chip_consensus(
+            gameweek=3, contributing_creators=1, contributing_weight=1.0, creators_with_plans=1
+        )
+        report = _render_with_chip_consensus(consensus)
+        assert f"| {Chip.WILDCARD.value} |" in report
+
     def test_names_share_and_group_marker(self) -> None:
         tallies = [
             _chip_tally(

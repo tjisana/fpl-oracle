@@ -16,15 +16,14 @@ without a dependency cycle.
 
 DEDUPE. A creator can post more than one video with plans for the same
 chip. Exactly one vote per (creator_id, chip) survives: the highest-
-conviction plan, tie-broken by (1) `target_gameweek == gameweek` —
-including the degenerate case where both are `None`, which is the literal
-reading of "prefer target_gameweek == gameweek" and never actually gets
-exercised for `this_gameweek` bucketing, since a `None`-gameweek run
-always buckets a `None`-target vote as `unspecified` regardless of which
-plan won the tie-break; (2) the lowest non-None target; (3) `None` as the
-final fallback. A STALE plan (`target_gameweek < gameweek`) is never a
-tie-break candidate: every stale plan is pulled out first and recorded
-verbatim (not deduped) in `ChipConsensus.stale`.
+conviction plan, tie-broken by (1) `target_gameweek == gameweek`, but
+ONLY when `gameweek` is not `None` — with `gameweek is None` this check
+is skipped entirely rather than comparing `None == None`, which would
+otherwise let an undated plan beat a dated one at equal conviction and
+silently discard the more specific plan; (2) the lowest non-None target;
+(3) `None` as the final fallback. A STALE plan (`target_gameweek <
+gameweek`) is never a tie-break candidate: every stale plan is pulled out
+first and recorded verbatim (not deduped) in `ChipConsensus.stale`.
 """
 
 from __future__ import annotations
@@ -93,8 +92,15 @@ def _tie_break_key(plan: ChipPlan, gameweek: int | None) -> tuple[int, int, tupl
     """Sort key selecting the single surviving plan among a creator's
     plans for one chip: highest conviction first, then (in order)
     `target_gameweek == gameweek`, then the lowest non-None target, then
-    `None`. `min()` over this key picks the winner."""
-    matches_gameweek = 0 if plan.target_gameweek == gameweek else 1
+    `None`. `min()` over this key picks the winner.
+
+    The `target_gameweek == gameweek` check applies ONLY when `gameweek`
+    is not `None`. With `gameweek is None`, that equality would compare
+    `None == None` and let an undated plan beat a dated one at equal
+    conviction — silently discarding the more specific plan's
+    information. So a `None` gameweek skips straight to "lowest non-None
+    target, then None", the same as any dated plan that doesn't match."""
+    matches_gameweek = 0 if gameweek is not None and plan.target_gameweek == gameweek else 1
     if plan.target_gameweek is not None:
         target_rank = (0, plan.target_gameweek)
     else:
@@ -114,7 +120,11 @@ def summarize_chip_plans(
     for extraction in extractions:
         plans_by_creator.setdefault(extraction.creator_id, []).extend(extraction.chip_plans)
 
-    contributing_weight = sum(creator_weights.get(cid, 0.0) for cid in plans_by_creator)
+    # `sorted(...)` before summing keeps float-addition order (and thus the exact
+    # result, in principle) independent of extraction insertion order — same
+    # determinism concern `_modal_gameweek` (report/gameweek.py) documents for its
+    # own tie-break.
+    contributing_weight = sum(sorted(creator_weights.get(cid, 0.0) for cid in plans_by_creator))
 
     stale: list[ChipVote] = []
     votes_by_chip: dict[Chip, list[ChipVote]] = {chip: [] for chip in Chip}

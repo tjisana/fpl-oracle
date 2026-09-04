@@ -140,6 +140,27 @@ class TestDedupe:
         # Deterministic pick among equal keys: the first one in input order.
         assert wildcard.unspecified[0].reasoning == "first"
 
+    def test_gameweek_none_does_not_let_an_undated_plan_beat_a_dated_one(self) -> None:
+        """With `gameweek is None`, `target_gameweek == gameweek` must NOT
+        be read as `None == None` matching an undated plan — that would
+        let a `None`-target plan win a tie over a dated one, discarding
+        the more specific plan's information. The dated plan (GW5) must
+        win at equal conviction, landing in `later`."""
+        extraction = _extraction(
+            "alice",
+            [
+                _plan(target_gameweek=5, conviction=3, reasoning="dated"),
+                _plan(target_gameweek=None, conviction=3, reasoning="undated"),
+            ],
+        )
+        consensus = summarize_chip_plans([extraction], {"alice": 1.0}, gameweek=None)
+        wildcard = consensus.tallies[0]
+        assert wildcard.this_gameweek == []
+        assert wildcard.unspecified == []
+        assert len(wildcard.later) == 1
+        assert wildcard.later[0].target_gameweek == 5
+        assert wildcard.later[0].reasoning == "dated"
+
     def test_dedupe_is_per_chip_not_global(self) -> None:
         extraction = _extraction(
             "alice",

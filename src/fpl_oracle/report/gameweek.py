@@ -863,7 +863,14 @@ def _render_chip_consensus(record: RunRecord, creators_by_id: dict[str, str]) ->
     )
 
     if consensus.creators_with_plans == 0:
-        return [header, "", "_No creator stated a chip intention this week._", ""]
+        lines = [header, "", "_No creator stated a chip intention this week._", ""]
+        if consensus.stale:
+            lines.append(
+                f"_Ignored as past-dated: {len(consensus.stale)} plan(s) targeting an earlier "
+                "gameweek._"
+            )
+            lines.append("")
+        return lines
 
     lines = [
         header,
@@ -877,7 +884,7 @@ def _render_chip_consensus(record: RunRecord, creators_by_id: dict[str, str]) ->
     ]
     rows = [
         [
-            _CHIP_DISPLAY_NAMES[tally.chip],
+            _CHIP_DISPLAY_NAMES.get(tally.chip, tally.chip.value),
             _this_gameweek_cell(tally, creators_by_id),
             _later_cell(tally, creators_by_id),
             _unspecified_cell(tally, creators_by_id),
