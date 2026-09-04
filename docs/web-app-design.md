@@ -35,6 +35,30 @@ build must exercise: TypeScript, React, API design, AWS, programmatic AI.
 | 19 | **Never write to FPL.** The site produces a change checklist and opens the FPL transfers page in a new tab; the owner makes the clicks there | Automating transfers/captain/chips through the owner's FPL session | No official write API; against FPL's terms with the account as the penalty; their login has moved to a bot-protected identity service and breaks automation without warning; a site holding an FPL login is a different security problem. Treated as a permanent no, not a "later" |
 | 20 | The **My squad tab switches state by the calendar**: live view while the gameweek's matches run, planning view (availability, backing, change checklist) between the last match and the next deadline | Separate Live and My squad tabs | It is what the owner wants on each day; keeps four tabs; teaches rendering different views from the same data |
 
+## Tab 1 — My squad (home)
+
+Two states, chosen by the calendar; one screen each.
+
+**Live state** (first kickoff of the gameweek until the last match ends):
+- Top: gameweek points so far vs the live average; overall rank as of
+  FPL's last update, with the update time. No estimated live rank.
+- The fifteen: for each player, points so far (provisional bonus labelled),
+  or opponent + kickoff time if yet to play; match state finished / in play
+  / upcoming. Captain multiplier and active chip applied to the total.
+  Predicted autosubs labelled as predicted.
+
+**Planning state** (last match ends until the next deadline):
+- Top: deadline countdown; bank; free transfers; chips remaining.
+- Change checklist: this week's recommended action (transfer(s), captain,
+  vice, chip) as tick-boxes, plus a button that opens FPL's transfers page
+  in a new tab. The site never writes to FPL (decision 19).
+- The fifteen: availability flag, creator backers, price and price risk.
+
+**Both states**: pitch view by default (eleven in formation, bench in a row
+beneath; each card = name, price, one number: points or backers); a toggle
+switches to a table (position, name, team, price, availability, backers,
+points, opponent), sortable.
+
 ## Facts that shaped these
 
 - Only existing web code is the draft-room app (`draft/serve.py`, stdlib
