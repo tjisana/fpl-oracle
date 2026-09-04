@@ -30,6 +30,7 @@ from fpl_oracle.report.gameweek import render_report, write_report
 from fpl_oracle.report.models import Concern, ConcernKind, PlayerNuance, SquadNuance
 from fpl_oracle.roster.models import Creator, Tier
 from fpl_oracle.solver.squad import Squad, SquadPlayer
+from fpl_oracle.solver.wildcard import WildcardGap
 
 # ---------------------------------------------------------------------------
 # Fixtures.
@@ -116,6 +117,8 @@ def _record(
     inputs: list[ExtractionInput] | None = None,
     git: GitInfo | None = None,
     bootstrap_fetched_at: datetime | None = None,
+    wildcard_gap: WildcardGap | None = None,
+    transfer_note: str = "",
 ) -> RunRecord:
     return RunRecord(
         run_id="20260819T120000Z-abc1234",
@@ -139,6 +142,8 @@ def _record(
             captain_options_required=captain_options_required,
             relaxed_captaincy=relaxed_captaincy,
         ),
+        wildcard_gap=wildcard_gap,
+        transfer_note=transfer_note,
     )
 
 
@@ -1137,3 +1142,101 @@ class TestDiffSection:
             diff=diff,
         )
         assert "No previous run to diff against" in report
+
+
+def _wildcard_gap(
+    *,
+    my_objective: float = 99.12,
+    solver_objective: float = 101.84,
+    best_single_transfer_delta: float | None = 0.62,
+    transfers_equivalent: float | None = 4.4,
+    kept_player_ids: list[int] | None = None,
+    unbacked_owned_ids: list[int] | None = None,
+) -> WildcardGap:
+    kept = kept_player_ids if kept_player_ids is not None else [1, 2]
+    return WildcardGap(
+        my_objective=my_objective,
+        solver_objective=solver_objective,
+        gain=solver_objective - my_objective,
+        best_single_transfer_delta=best_single_transfer_delta,
+        transfers_equivalent=transfers_equivalent,
+        kept_player_ids=kept,
+        kept_count=len(kept),
+        changes_needed=15 - len(kept),
+        unbacked_owned_ids=unbacked_owned_ids if unbacked_owned_ids is not None else [3],
+    )
+
+
+class TestWildcardGapSection:
+    def test_absent_when_none(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        report = render_report(
+            record=_record(wildcard_gap=None),
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[],
+        )
+        assert "Wildcard gap" not in report
+
+    def test_renders_after_transfer_section_with_names_and_full_sentence(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        gap = _wildcard_gap(
+            kept_player_ids=[pool[0].player_id], unbacked_owned_ids=[pool[1].player_id]
+        )
+        report = render_report(
+            record=_record(wildcard_gap=gap, transfer_note="Roll — squad is fine."),
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[],
+        )
+        assert "## Wildcard gap" in report
+        transfer_index = report.index("This week's transfer")
+        wildcard_index = report.index("## Wildcard gap")
+        assert transfer_index < wildcard_index
+        assert "**101.84**" in report
+        assert "**99.12**" in report
+        assert "**+2.72**" in report
+        assert "+0.62" in report
+        assert "4.4 transfers" in report
+        assert pool[0].web_name in report
+        assert pool[1].web_name in report
+        assert "The solver would keep 1 of your 15" in report
+        assert "Owned players with no creator backing this week:" in report
+
+    def test_omits_best_transfer_sentence_when_transfers_equivalent_none(self) -> None:
+        pool = _basic_pool()
+        db = _db(pool)
+        squad = _basic_squad(pool)
+        gap = _wildcard_gap(best_single_transfer_delta=None, transfers_equivalent=None)
+        report = render_report(
+            record=_record(wildcard_gap=gap),
+            squad=squad,
+            scores={},
+            election=_empty_election(),
+            db=db,
+            extractions=[],
+            creators=[],
+        )
+        assert "transfers' worth of consensus" not in report
+
+    def test_zero_kept_renders_without_a_name_list(self) -> None:
+        gap = _wildcard_gap(kept_player_ids=[])
+        lines = gameweek_mod._render_wildcard_gap(_record(wildcard_gap=gap), _db(_basic_pool()))
+        text = "\n".join(lines)
+        assert "The solver would keep 0 of your 15." in text
+
+    def test_no_unbacked_owned_renders_none(self) -> None:
+        gap = _wildcard_gap(unbacked_owned_ids=[])
+        lines = gameweek_mod._render_wildcard_gap(_record(wildcard_gap=gap), _db(_basic_pool()))
+        text = "\n".join(lines)
+        assert "Owned players with no creator backing this week: none." in text

@@ -74,6 +74,7 @@ from fpl_oracle.roster.registry import REGISTRY
 from fpl_oracle.roster.weights import weight_for
 from fpl_oracle.solver.squad import Squad, build_squad
 from fpl_oracle.solver.transfers import TransferRecommendation, recommend_transfer
+from fpl_oracle.solver.wildcard import WildcardGap, wildcard_gap
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,17 @@ class RunRecord(BaseModel):
     my_squad_note: str = Field(
         default="",
         description="why my_squad is None, or a short confirmation of what was fetched",
+    )
+    wildcard_gap: WildcardGap | None = Field(
+        default=None,
+        description=(
+            "the owner's squad vs the solver's £100m squad on the solver's own objective "
+            "(price + consensus, availability-scaled, bench at BENCH_WEIGHT). Observational. "
+            "Defaults to None so older run.json files parse."
+        ),
+    )
+    wildcard_note: str = Field(
+        default="", description="why wildcard_gap is None, or a one-line summary"
     )
 
 
@@ -1038,6 +1050,26 @@ def run_pipeline(
             logger.warning("pipeline: transfer recommendation failed: %s", e)
             transfer_note = f"transfer recommendation failed: {e}"
 
+    # How far the owner's actual squad sits from the solver's own £100m
+    # answer, on the solver's own yardstick. Depends on `transfer_rec` for
+    # the transfers-equivalent conversion, so it runs after that block.
+    wildcard: WildcardGap | None = None
+    wildcard_note = "no owned squad available — wildcard gap skipped"
+    if my_squad_summary is not None:
+        try:
+            wildcard = wildcard_gap(
+                owned=my_squad_summary.players,
+                solver_squad=squad,
+                db=db,
+                scores=scores,
+                verdicts=availability.verdicts,
+                transfer_rec=transfer_rec,
+            )
+            wildcard_note = f"gap {wildcard.gain:+.2f}; solver keeps {wildcard.kept_count}/15"
+        except Exception as e:  # noqa: BLE001 - never cost the run its squad
+            logger.warning("pipeline: wildcard gap failed: %s", e)
+            wildcard_note = f"wildcard gap failed: {e}"
+
     finished_at = datetime.now(UTC)
     run_id, run_dir = _reserve_run_dir(runs_dir, _base_run_id(started_at, git))
 
@@ -1074,6 +1106,8 @@ def run_pipeline(
         ),
         my_squad=my_squad_summary,
         my_squad_note=my_squad_note,
+        wildcard_gap=wildcard,
+        wildcard_note=wildcard_note,
     )
 
     (run_dir / "run.json").write_text(record.model_dump_json(indent=2))
