@@ -26,6 +26,7 @@ SQUAD CONTEXT
 - Many videos present a drafted squad. Tag each pick that belongs to one with squad_context: "own_team" for the creator's actual team (and transfers into it), "wildcard" for a fresh 15 built on a wildcard, "free_hit" for a one-gameweek free-hit team that reverts after the gameweek.
 - A free-hit team is a ONE-WEEK fixture play and is deliberately not treated as a lasting endorsement downstream. Only label a squad free_hit when the creator says it is a free hit. A wildcard draft is not free_hit just because both chips are discussed in the video.
 - A video that presents both a wildcard draft and a free-hit draft yields picks tagged with each; the same player appearing in both squads is two picks, one per squad.
+- A single squad the creator presents as "free hit or wildcard", still undecided between the two chips, is free_hit: it may only last one week, and downstream treats it as such.
 - Null for opinions not tied to a drafted squad (most watchlist and avoid picks), and whenever it is genuinely unclear which squad a pick belongs to.
 
 CHIP PLANS

@@ -917,8 +917,13 @@ _SOLVER_SQUAD_CAVEAT = (
 
 
 def _free_hit_exclusion_line(record: RunRecord, creators_by_id: dict[str, str]) -> str:
+    """Rendered BEFORE the recommendation's reasoning: on a wildcard week
+    the withheld picks can be most of the evidence, and a reasoning line
+    like "best move has only 0 backers" reads as "nobody likes your squad"
+    unless the reader has already been told the evidence was set aside."""
     n = record.counts.picks_free_hit_excluded_from_transfer
     names = ", ".join(_creator_name(creators_by_id, cid) for cid in record.free_hit_sources)
+    names = names or "unrecorded creators"
     pick_word = "pick" if n == 1 else "picks"
     return (
         f"_Free-hit drafts kept out of this section: {n} {pick_word} from {names}. "
@@ -938,21 +943,22 @@ def _render_transfer(record: RunRecord, creators_by_id: dict[str, str]) -> list[
     if rec is None:
         if not record.transfer_note:
             return []
-        lines = ["## This week's transfer", "", f"_{record.transfer_note}_", ""]
+        lines = ["## This week's transfer", ""]
         if record.counts.picks_free_hit_excluded_from_transfer > 0:
             lines += [_free_hit_exclusion_line(record, creators_by_id), ""]
+        lines += [f"_{record.transfer_note}_", ""]
         return lines
 
-    lines = [f"## This week's transfer — {rec.verdict}", "", rec.reasoning, ""]
+    lines = [f"## This week's transfer — {rec.verdict}", ""]
+    if record.counts.picks_free_hit_excluded_from_transfer > 0:
+        lines += [_free_hit_exclusion_line(record, creators_by_id), ""]
+    lines += [rec.reasoning, ""]
 
     if rec.unavailable_owned:
         lines += [
             f"> **Unavailable in your squad:** {', '.join(rec.unavailable_owned)}",
             "",
         ]
-
-    if record.counts.picks_free_hit_excluded_from_transfer > 0:
-        lines += [_free_hit_exclusion_line(record, creators_by_id), ""]
 
     if rec.recommended is not None:
         m = rec.recommended
