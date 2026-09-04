@@ -22,7 +22,7 @@ build must exercise: TypeScript, React, API design, AWS, programmatic AI.
 | 6 | **Local first**, AWS after the tabs work | AWS from day one | Owner's call; keep the AWS path designed in so it does not rot |
 | 7 | **Vite + React + TypeScript** SPA | Next.js | Smaller surface for a one-month, local-first build; Next.js as a later project that needs its server side |
 | 8 | **FastAPI** service; OpenAPI schema → generated TS types | Static JSON files | The "API design" line on the skills list; moves to AWS unchanged |
-| 9 | Live features (live points, bonus, rank) in **release two** | Live in release one | None of the live plumbing exists in the engine; four tabs are buildable on today's data |
+| 9 | **Live gameweek view in release one** (amended 2026-09-04): per-player points so far, match state (finished / in play / kickoff time + opponent), gameweek total with captain multiplier, live average; provisional bonus and predicted autosubs LABELLED as such. **No live rank** — FPL publishes rank only after each day's matches; livefpl's live rank is an estimate from a sample. We show rank as of FPL's last update, plus points vs live average | Live in release two; estimated live rank | Owner wants to be greeted by the live page; the plumbing is three public endpoints (`event/{gw}/live/`, `fixtures/`, picks) and needs no scraping |
 | 10 | Database from the start: **SQLite now**, behind an ORM with migrations | Files only | Owner wants history and grading of decisions; schema/migrations are the credited skill |
 | 11 | **Postgres via Docker Compose** is the target; swap is a connection string | Postgres from day one | Owner's call; SQLite is right for single-user local, wrong for serverless |
 | 12 | **Monorepo**: `web/` next to the Python package; separate tooling roots | Two repos | One-system story; generated types land next to their consumer |
@@ -33,6 +33,7 @@ build must exercise: TypeScript, React, API design, AWS, programmatic AI.
 | 17 | **Tailwind + shadcn/ui** | MUI/Mantine; plain CSS | Most common in current postings; copied-in components the owner can explain line by line |
 | 18 | Draft-room app stays a standalone tool, one README paragraph | Rebuild as a tab | Works, used in a real draft, smaller audience |
 | 19 | **Never write to FPL.** The site produces a change checklist and opens the FPL transfers page in a new tab; the owner makes the clicks there | Automating transfers/captain/chips through the owner's FPL session | No official write API; against FPL's terms with the account as the penalty; their login has moved to a bot-protected identity service and breaks automation without warning; a site holding an FPL login is a different security problem. Treated as a permanent no, not a "later" |
+| 20 | The **My squad tab switches state by the calendar**: live view while the gameweek's matches run, planning view (availability, backing, change checklist) between the last match and the next deadline | Separate Live and My squad tabs | It is what the owner wants on each day; keeps four tabs; teaches rendering different views from the same data |
 
 ## Facts that shaped these
 
@@ -53,6 +54,7 @@ build must exercise: TypeScript, React, API design, AWS, programmatic AI.
 ## Work split for the month
 
 Claude (engine, API, data):
+0. Live module in `fpl/`: live points, fixtures/match state, provisional bonus from bps, predicted autosubs; exposed by the API.
 1. Database: schema for runs, picks, creator votes, chip plans, decisions;
    SQLite via SQLAlchemy + Alembic; pipeline writes each run; backfill the
    run folders already on disk.
