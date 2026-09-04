@@ -341,6 +341,14 @@ the Sonnet implementer and reviewed fresh-context on Opus:
   because price carries most of the yardstick.
 - Also fixed on the way: the 2026-08-28 runbook/roadmap were GW2-specific; a
   GW3 section now leads the runbook.
+- **Pricing reconciliation was checking the wrong invariant** (found 2026-09-04,
+  first week a price moved). FPL's `entry_history.value` is MARKET value at
+  the deadline (now_cost + bank), not a selling total; the GW1 "match" was a
+  coincidence. `fpl/selling.py` now reconciles market value, rolling each
+  price back to the deadline via `cost_change_event` when the squad's
+  gameweek is bootstrap's current event, and refuses to verify a mid-season
+  entrant (`started_event != 1`). Selling arithmetic unchanged. Review made
+  the regression fixture non-cancelling so a sign flip cannot pass.
 
 ## Later (post-GW1)
 - Weekly transfer recommender aware of my actual squad/budget/free transfers
