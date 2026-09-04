@@ -32,6 +32,7 @@ build must exercise: TypeScript, React, API design, AWS, programmatic AI.
 | 16 | Evidence trail: extend pick extraction to **verbatim quote + derived timestamp**, deep-linking to the video; tab renders paraphrase-only for older gameweeks | Paraphrase only | The differentiator; reuses `roster/claim_verify.py`'s mechanical quote check; first real gameweek = GW4 |
 | 17 | **Tailwind + shadcn/ui** | MUI/Mantine; plain CSS | Most common in current postings; copied-in components the owner can explain line by line |
 | 18 | Draft-room app stays a standalone tool, one README paragraph | Rebuild as a tab | Works, used in a real draft, smaller audience |
+| 19 | **Never write to FPL.** The site produces a change checklist and opens the FPL transfers page in a new tab; the owner makes the clicks there | Automating transfers/captain/chips through the owner's FPL session | No official write API; against FPL's terms with the account as the penalty; their login has moved to a bot-protected identity service and breaks automation without warning; a site holding an FPL login is a different security problem. Treated as a permanent no, not a "later" |
 
 ## Facts that shaped these
 
