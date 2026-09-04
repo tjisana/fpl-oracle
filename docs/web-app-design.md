@@ -59,6 +59,29 @@ beneath; each card = name, price, one number: points or backers); a toggle
 switches to a table (position, name, team, price, availability, backers,
 points, opponent), sortable.
 
+## Tab 2 — Report
+
+Release one renders the run's markdown report as-is (API serves the text).
+Sections are then rebuilt one at a time from the structured run record,
+starting with the transfer card and the solver's squad on the shared pitch
+component; chip consensus as a table; "why these players" as expandable
+rows. Each rebuilt section replaces its chunk of rendered markdown.
+
+## Tab 3 — Creator ownership
+
+A table of every player with a vote: creators owning, creators captaining,
+weighted share; sorted by share. Beside it a per-creator grid (players x
+creators) showing who owns whom. Run-over-run change is release two
+(needs history; the schema keeps per-run votes so it is possible).
+
+## Tab 4 — Evidence trail
+
+Per player: every creator's verbatim quote with a timestamped YouTube deep
+link (from GW4), conviction, personal vs group; paraphrase + video link for
+gameweeks extracted before quotes existed. Entry points: a search box on
+the tab, AND every player name on the other three tabs links here with the
+player carried in the URL.
+
 ## Facts that shaped these
 
 - Only existing web code is the draft-room app (`draft/serve.py`, stdlib
