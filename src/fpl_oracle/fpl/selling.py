@@ -107,8 +107,10 @@ class SquadPricing(BaseModel):
             "sum of now_cost across the owned squad, rolled back to the relevant "
             "deadline via cost_change_event when adjusted_for_event_changes is True — "
             "this, not the selling total, is what gets reconciled against FPL's reported "
-            "squad value. None when the reconciliation could not be attempted at all "
-            "(no reported value, or missing elements)."
+            "squad value. None when the reconciliation could not be attempted at all: no "
+            "reported value, missing elements, or a mid-season entrant flagged via "
+            "started_event (season-start prices aren't valid purchase prices for them, "
+            "so no market value is computed at all)."
         ),
     )
     adjusted_for_event_changes: bool = Field(
@@ -230,10 +232,14 @@ def derive_squad_pricing(
 
     delta = reported_squad_value - (market_at_deadline + bank)
     if delta == 0:
+        # Only claim "at the GW{n} deadline" when a rollback actually
+        # happened — otherwise the figure is just today's now_cost sum,
+        # which may or may not equal the true deadline value, and saying
+        # so as fact would overclaim what was actually checked.
         deadline_phrase = (
-            "at the last deadline"
-            if squad_gameweek is None
-            else f"at the GW{squad_gameweek} deadline"
+            f"at the GW{squad_gameweek} deadline"
+            if adjust
+            else "(using today's prices; not rolled back to a deadline)"
         )
         return SquadPricing(
             prices=prices,
