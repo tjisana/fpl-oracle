@@ -151,6 +151,13 @@ is it worth -4?" Different objective, much smaller search space.
 
 ## KNOWN ISSUES
 
+- [ ] **Pricing reconciliation degrades between a deadline and that gameweek's
+      last fixture.** `my_squad.gameweek` is the last FINISHED gameweek while
+      the price rollback keys on bootstrap's `is_current` event, so for ~2 days
+      a week they differ and the market-value check cannot roll prices back
+      (note says so; affordability reads UNVERIFIED). Fix: fetch the
+      in-progress gameweek's picks (public after the deadline) so squad and
+      current event agree. Pre-deadline runs, the normal path, are unaffected.
 - [ ] **Default data paths are RELATIVE** (`data/...` in `ingest/`, `extract/`,
       `fpl/`, `pipeline`). Any command run from a cwd other than the repo root
       silently builds a parallel `data/` tree there — on 2026-09-03 a dry-run
