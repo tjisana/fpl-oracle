@@ -82,6 +82,31 @@ gameweeks extracted before quotes existed. Entry points: a search box on
 the tab, AND every player name on the other three tabs links here with the
 player carried in the URL.
 
+## North star — the one-stop shop (owner, 2026-09-05)
+
+Eventually the site is the only place the owner goes. Two later releases,
+neither in the first month, both designed for now:
+
+1. **Controls.** Buttons that pull new YouTube videos, run extraction, and
+   re-solve, with job status visible in the page. This is decision 14's
+   "eye to full control". Design consequence NOW: the API is split into
+   read endpoints (release one) and, later, job endpoints that enqueue
+   work and report status — never long-running requests. The pipeline's
+   stages already have clean entry points (`warm_cache`, `run_extract`,
+   `run_pipeline`), so the job layer wraps them rather than rewriting.
+2. **An assistant text box.** Ask questions about the data in plain
+   language ("why Konsa over Thomas?", "who is the room captaining?") and
+   get answers grounded in the run record and the evidence trail. Built as
+   an LLM with tool use over the site's OWN API: every read endpoint is a
+   tool the assistant can call, so endpoint names and descriptions are
+   written to be readable by a model as well as a person. Model choice is
+   open (Claude or a cheaper option); the design does not depend on it.
+   This is the "programmatic AI" line of the portfolio in its clearest form.
+
+Design consequence for release one: name and document every API endpoint
+as if a model will read the description, keep responses small and
+self-describing, and keep the read/write split strict.
+
 ## Facts that shaped these
 
 - Only existing web code is the draft-room app (`draft/serve.py`, stdlib
