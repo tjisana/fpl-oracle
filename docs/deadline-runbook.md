@@ -1,5 +1,60 @@
 # Deadline-morning runbook
 
+## GW4 — Sat 2026-09-12, 12:30 UTC / 08:30 EDT
+
+State on 2026-09-10 (~04:00 UTC): 18 GW4-window transcripts cached from 4
+creators (Let's Talk FPL, FPL Harry, FPL Raptor, Pras) before YouTube
+blocked the IP; 14 creators unread. Gemini is now the DEFAULT transcript
+source, so the block no longer matters. The Gemini free tier caps at 8
+hours of video per day; extraction reads ONE video per creator, and the
+GW4 selection measured on 2026-09-11 is 14 videos / 5.6 h (4.2 h uncached)
+— under the cap, so the paid tier is not needed. Skip the full warm
+(5 videos per creator, 22 h) and let extraction fetch exactly what it
+selects.
+
+Owner context: GW3 used Triple Captain (Haaland); wildcard planned for
+THIS deadline with the solver's £100m squad as the template; 1 FT,
+~£0.1m bank. Saturday deadline, so "deadline morning" is Friday evening
+plus a Saturday-morning refresh.
+
+### 1. (Optional) warm only the selected videos via Gemini
+
+Not required: step 3 fetches the selected video per creator itself, via
+Gemini by default. Only warm if you want the fetches done ahead of the
+paid step — and then cap it: `--max-per-creator 1` keeps it near the
+selection instead of 22 h of podcasts. Expect `gemini:<model>:untimed`
+provenance (timings are discarded — see ROADMAP). If a run stops with the
+breaker's "8-hours-per-day cap" message, wait for the daily reset or
+enable the paid tier on the key (YouTube input is still no-charge).
+
+### 2. Refresh the listing and read what extraction will select (free)
+
+```
+uv run python -m fpl_oracle.extract.run_extract --gameweek 4 --force-refresh --dry-run
+```
+
+### 3. Extract, then solve (paid: ~18 Claude calls)
+
+```
+uv run python -m fpl_oracle.extract.run_extract --gameweek 4 --force-refresh
+uv run python -m fpl_oracle.pipeline --gameweek 4 --force-refresh
+```
+
+PASS `--gameweek 4` EXPLICITLY. Before either, pull the cloud price
+snapshots: `./scripts/sync_snapshots.sh`.
+
+### 4. Read, in this order
+
+1. Grade the GW3 decision (`data/runs/20260904T163052Z-917ec6b/decision.md`)
+   against actual GW3 points.
+2. `## Wildcard gap` and `## Chip consensus` — this is the wildcard week.
+3. `## This week's transfer` — only if the wildcard is NOT played.
+4. `data/extractions/match_quality.md` — resolution per creator; compare
+   Gemini-read creators against the 4 scraped ones (the widened
+   comparison the roadmap asked for).
+
+---
+
 ## GW3 — Fri 2026-09-04, 17:30 UTC / 13:30 EDT
 
 State on the eve (2026-09-03 ~20:30 UTC): transcript cache warm for every

@@ -1,5 +1,16 @@
 # Daily jobs
 
+> **Status 2026-09-10.** The laptop `launchd` jobs below were installed and
+> then REMOVED the same day: the owner closes the laptop nightly, so they
+> would rarely fire, and the warm job was the YouTube scraper — an
+> unattended 1 AM burst on deadline eve is exactly how the IP got blocked.
+> Today: the **price snapshot runs in AWS** (see "Cloud snapshot" at the
+> bottom; `scripts/sync_snapshots.sh` pulls it down) and the **transcript
+> warm is run by hand** with Gemini as the default source
+> (`uv run python -m fpl_oracle.ingest.warm_cache`), which cannot be
+> IP-blocked. The launchd material is kept for reinstalling the warm job
+> if a Gemini-backed nightly run ever earns its keep.
+
 Two pieces of infrastructure that only have value if they run every day,
 unattended: the price snapshot and the transcript cache warm. Both exist
 as code already; this doc is how to actually schedule them.

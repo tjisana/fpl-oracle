@@ -10,7 +10,30 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW3 deadline (Fri 2026-09-04, 17:30 UTC / 13:30 EDT)
+## NOW — GW4 deadline (Sat 2026-09-12, 12:30 UTC / 08:30 EDT)
+
+GW3 decision (2026-09-04): Thomas → Konsa, Triple Captain on Haaland,
+wildcard deferred to GW4 with the solver's squad as the template. Grade it
+against GW3 points before trusting the GW4 report.
+
+- [x] **Price snapshot moved to AWS** (2026-09-10): Lambda + S3, 07:00 UTC
+      daily, alarm emails on failure. `scripts/sync_snapshots.sh` pulls it
+      down. Laptop launchd jobs removed. See `docs/daily-jobs.md`.
+- [x] **Gemini made the default transcript source** (2026-09-10) after the
+      third IP block in three gameweeks. See the ADOPTED section below.
+- [ ] **Read the GW4 videos via Gemini.** 18 transcripts (4 creators) were
+      scraped before the 2026-09-10 block. Extraction reads one video per
+      creator: measured 2026-09-11, 14 selected / 5.6 h / 4.2 h uncached —
+      under the free tier's 8 h-of-video-per-day cap, so no paid tier
+      needed. (A full warm at 5 videos/creator would be 22 h; don't.)
+- [ ] **Run extraction, then solve, `--gameweek 4` on both.** Wildcard
+      week: read the wildcard-gap line and chip consensus first. See
+      `docs/deadline-runbook.md` (GW4 section).
+- [ ] **Timing enrichment** — Gemini transcripts are `:untimed`; add a
+      laptop-side pass that aligns a scraped caption track (when one can be
+      fetched without a block) onto the Gemini text so deep links come back.
+
+### GW3 deadline (done 2026-09-04) — kept for the record
 
 GW2 result: 114 pts (GW1: 34), OR 8.09M → 2.27M. Transfer made: Wirtz →
 Szoboszlai (the report's #2 move). Into GW3 with 1 FT, £0.5m bank, all
@@ -23,14 +46,14 @@ chips unused.
       after GW3 despite the earlier tick: snapshots missed 09-04 to 09-10.
       Snapshot is non-negotiable (prices change nightly); warm is free,
       spends no LLM credits, and collects creator posting-schedule data.
-- [ ] **Wildcard week** — most GW3 titles are wildcard / free-hit drafts.
-      Three changes in flight (2026-09-03): free-hit picks excluded from the
+- [x] **Wildcard week** — most GW3 titles were wildcard / free-hit drafts.
+      Three changes shipped (2026-09-03): free-hit picks excluded from the
       transfer recommender (kept for the £100m squad); a chip-consensus
       section reading the already-extracted `chip_plans`; a wildcard-gap
       line comparing the owned squad with the solver's on the solver's own
       objective.
-- [ ] **Run extraction, then solve.** See `docs/deadline-runbook.md` (GW3
-      section).
+- [x] **Run extraction, then solve.** Done 2026-09-04; decision recorded in
+      `data/runs/20260904T163052Z-917ec6b/decision.md`.
 - [ ] **Creator posting schedule** — every cached listing and extraction
       carries a publish timestamp; after a few gameweeks, derive when each
       creator actually posts and gate the warm job on it instead of guessing.
@@ -45,10 +68,22 @@ chips unused.
 - [x] Transfer recommender (`solver/transfers.py`), wired to the report.
 - [x] Blocked-transcript retry, Gemini fallback run by hand for 4 creators.
 
-## STRONGLY CONSIDERING — move transcript ingestion to Gemini
+## ADOPTED 2026-09-10 — Gemini is the default transcript source
 
-**Status 2026-08-28: evaluated on real data, not yet adopted. This is the
-most consequential open decision in the project.**
+**Decision:** `ingest/sourcing.py` routes every transcript fetch through
+Gemini by default; the caption scraper is opt-in (`--source captions`) for
+the real timestamps it still uniquely provides. Trigger: a third IP block
+in three gameweeks (2026-09-10, 6s pacing, residential IP, blocked on the
+19th fetch), which falsified "rate matters more than IP class".
+Still open from the list below: timestamps (Gemini's are discarded, so
+the evidence trail's deep links degrade to untimed for Gemini-read
+videos — a laptop-side "timing enrichment" pass from captions is the
+planned fix), and the free tier's 8-hours-of-video-per-day cap (paid tier
+lifts it; the YouTube-URL feature itself is still no-charge in preview).
+The GW4 run doubles as the widened comparison the last bullet asked for.
+
+**Status 2026-08-28 (kept for the record): evaluated on real data, not yet
+adopted. This is the most consequential open decision in the project.**
 
 The whole pipeline currently rests on a reverse-engineered endpoint.
 There is NO official way to read a third-party YouTube video's captions —
@@ -99,7 +134,8 @@ suggestive, not conclusive — widen the sample before committing.
 Already built (`ingest/gemini_transcripts.py`, `feat/gemini-transcripts`):
 fetch + timing validation + provenance. `Transcript.source` now records
 where text came from, defaulting to `youtube-captions` so existing files
-load unchanged. Gemini is a deliberate FALLBACK today, not the default.
+load unchanged. Gemini was a deliberate FALLBACK until 2026-09-10; it is
+now the default (see the heading).
 
 ## NEXT — in-season (the actual product)
 
