@@ -109,10 +109,13 @@ def write_snapshot(
     prefix: str,
     now: datetime | None = None,
     s3: Any | None = None,
-    fetch: Any = fetch_bootstrap,
+    fetch: Any | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     s3 = s3 or _s3_client()
+    # Resolved at call time, not bound as a default, so a test can patch
+    # `fetch_bootstrap` on the module and `handler()` never touches the network.
+    fetch = fetch or fetch_bootstrap
     key = f"{prefix}{now.date().isoformat()}.json"
     if _object_exists(s3, bucket, key):
         logger.info("snapshot: s3://%s/%s already exists — leaving it untouched", bucket, key)
