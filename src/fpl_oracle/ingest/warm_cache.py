@@ -10,8 +10,9 @@ Reuses the same machinery as `run_ingest.py` / `run_extract.py` rather than
 inventing new network code: `youtube_client.list_recent_videos` for
 listings, `run_ingest.videos_for_creator` for shared-channel attribution,
 `run_ingest.filter_min_duration` for the Shorts filter, and
-`transcripts.fetch_transcript` (the read-through cache) for the actual
-transcript fetch.
+`sourcing.fetch_transcript_from` (the read-through cache, defaulting to
+Gemini — see that module's docstring for why) for the actual transcript
+fetch.
 
     uv run python -m fpl_oracle.ingest.warm_cache --since 2026-08-22
 """
@@ -26,6 +27,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.table import Table
@@ -36,9 +38,15 @@ from fpl_oracle.ingest.run_ingest import (
     filter_min_duration,
     videos_for_creator,
 )
+from fpl_oracle.ingest.sourcing import (
+    DEFAULT_TRANSCRIPT_SOURCE,
+    SOURCE_ARG_HELP,
+    TRANSCRIPT_SOURCES,
+    TranscriptSource,
+    fetch_transcript_from,
+)
 from fpl_oracle.ingest.transcripts import (
     DEFAULT_TRANSCRIPT_DIR,
-    fetch_transcript,
     load_transcript,
     save_transcript,
 )
@@ -70,13 +78,15 @@ DEFAULT_FETCH_DELAY_SECONDS = 2.0
 # regular pattern that is itself a bot signal.
 FETCH_DELAY_JITTER = 0.4
 
-# Circuit breaker. `fetch_transcript` only re-raises RequestBlocked and
-# YouTubeRequestFailed; other environmental anti-bot states
-# (PoTokenRequired, YouTubeDataUnparsable — both CouldNotRetrieveTranscript
-# subclasses) come back as a plain None, indistinguishable from "this video
-# has no captions". A run in that state would mark EVERY video failed,
-# never trip the block path, and exit 0 looking finished. So: if this many
-# fetches fail in a row without a single success, stop and say so.
+# Circuit breaker. For `source="captions"`, `fetch_transcript_from` only
+# re-raises RequestBlocked and YouTubeRequestFailed; other environmental
+# anti-bot states (PoTokenRequired, YouTubeDataUnparsable — both
+# CouldNotRetrieveTranscript subclasses) come back as a plain None,
+# indistinguishable from "this video has no captions". For
+# `source="gemini"` every failure comes back as None too (it never raises).
+# Either way, a run in that state would mark EVERY video failed, never trip
+# the block path, and exit 0 looking finished. So: if this many fetches
+# fail in a row without a single success, stop and say so.
 CONSECUTIVE_FAILURE_LIMIT = 6
 
 # How many of a channel's newest uploads to list before date/duration
@@ -207,6 +217,31 @@ def eligible_creators_filtered(creator_ids: list[str] | None) -> list[Creator]:
     return creators
 
 
+def _durations_for(videos: list[VideoInfo], creator: Creator, purpose: str) -> dict[str, int]:
+    """Look up durations for `videos`, non-fatally. A quota blip, a
+    transient API failure, or a transport-level error (connection refused,
+    timeout — `httpx.HTTPError`, which `YouTubeApiError` does NOT subclass)
+    must not zero out a warming run — see `filter_min_duration`'s "unknown
+    is kept, never treated as too short" contract, which the Shorts-filter
+    caller feeds; the gemini-timing caller just does without timing
+    validation instead (see `gemini_transcripts`).
+
+    `purpose` names what gets skipped in the warning, e.g. "the
+    min-duration Shorts filter" or "Gemini timing validation" — the two
+    current callers, `videos_to_warm` and `warm_creator`, mean different
+    things by a duration-lookup failure and the log line should say which."""
+    try:
+        return get_video_durations([v.video_id for v in videos])
+    except (YouTubeApiError, httpx.HTTPError) as e:
+        logger.warning(
+            "warm_cache: duration lookup failed (%s) — skipping %s for %s",
+            e,
+            purpose,
+            creator.name,
+        )
+        return {}
+
+
 def videos_to_warm(
     creator: Creator,
     registry: list[Creator],
@@ -230,16 +265,7 @@ def videos_to_warm(
     attributed = videos_for_creator(creator, co_creators, videos)
     since_filtered = filter_since(attributed, since)
 
-    try:
-        durations = get_video_durations([v.video_id for v in since_filtered])
-    except YouTubeApiError as e:
-        logger.warning(
-            "warm_cache: duration lookup failed (%s) — skipping the min-duration "
-            "Shorts filter for %s, proceeding unfiltered",
-            e,
-            creator.name,
-        )
-        durations = {}
+    durations = _durations_for(since_filtered, creator, "the min-duration Shorts filter")
     selectable = filter_min_duration(since_filtered, durations)
     return selectable[:max_per_creator]
 
@@ -295,6 +321,7 @@ def warm_creator(
     max_per_creator: int,
     dir: Path,
     dry_run: bool,
+    source: TranscriptSource = DEFAULT_TRANSCRIPT_SOURCE,
     delay_seconds: float = DEFAULT_FETCH_DELAY_SECONDS,
     breaker: _FailureStreak | None = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -307,14 +334,19 @@ def warm_creator(
     Stops the whole run, via `WarmingInterrupted` carrying the outcomes
     completed so far, when either:
 
-    * `fetch_transcript` raises `RequestBlocked`/`YouTubeRequestFailed` —
-      environmental (this IP is blocked), not a fact about this creator; or
+    * `fetch_transcript_from` raises `RequestBlocked`/`YouTubeRequestFailed`
+      (captions only) — environmental (this IP is blocked), not a fact
+      about this creator; or
     * `breaker` trips, meaning enough fetches have failed in a row with no
-      success that "these videos have no captions" is no longer the
-      plausible explanation (see `CONSECUTIVE_FAILURE_LIMIT`).
+      success that "these videos have no captions"/"gemini keeps failing"
+      is no longer the plausible explanation (see
+      `CONSECUTIVE_FAILURE_LIMIT`).
 
-    Network fetches are throttled by `delay_seconds` with jitter; cached
-    hits never sleep."""
+    Network fetches are throttled by `delay_seconds` with jitter, but only
+    for `source="captions"` — that throttle exists to avoid YouTube scrape
+    blocks; Gemini isn't rate-limited by IP the same way, and its own
+    per-video latency (30-90s) is throttle enough on its own. Cached hits
+    never sleep either way."""
     try:
         videos = videos_to_warm(creator, registry, since, max_per_creator)
     except YouTubeApiError as e:
@@ -322,6 +354,15 @@ def warm_creator(
         summary = _summarise(creator, [])
         summary.error = f"video listing failed: {e}"
         return summary
+
+    # Gemini needs each video's duration to validate segment timings (see
+    # gemini_transcripts' module docstring); captions doesn't. videos_to_warm
+    # already looked durations up once for the Shorts filter, over a WIDER
+    # candidate set, and discarded them — this is one extra cheap videos.list
+    # call per creator, scoped to just the (much smaller) selected list.
+    durations = (
+        _durations_for(videos, creator, "Gemini timing validation") if source == "gemini" else {}
+    )
 
     outcomes: list[VideoWarmOutcome] = []
     for video in videos:
@@ -349,14 +390,17 @@ def warm_creator(
             )
             continue
 
-        # Throttle only real network work. Sleeping BEFORE the fetch (not
+        # Throttle only real network work, and only for the caption scrape —
+        # see this function's docstring. Sleeping BEFORE the fetch (not
         # after) means a run that is entirely cache hits never sleeps at all.
-        if delay_seconds > 0:
+        if source == "captions" and delay_seconds > 0:
             jitter = delay_seconds * FETCH_DELAY_JITTER
             sleep(max(0.0, delay_seconds + random.uniform(-jitter, jitter)))
 
         try:
-            transcript = fetch_transcript(video.video_id, dir=dir)
+            transcript = fetch_transcript_from(
+                video.video_id, source, dir=dir, duration_seconds=durations.get(video.video_id)
+            )
         except (RequestBlocked, YouTubeRequestFailed) as e:
             raise WarmingInterrupted(
                 f"{creator.creator_id}: {type(e).__name__}: {e}", outcomes
@@ -369,6 +413,11 @@ def warm_creator(
                 video.video_id,
                 creator.name,
             )
+            failure_reason = (
+                "gemini could not read the video"
+                if source == "gemini"
+                else "no transcript available"
+            )
             outcomes.append(
                 VideoWarmOutcome(
                     video_id=video.video_id,
@@ -376,16 +425,23 @@ def warm_creator(
                     published_at=video.published_at,
                     already_cached=False,
                     failed=True,
-                    failure_reason="no transcript available",
+                    failure_reason=failure_reason,
                 )
             )
             if breaker is not None and breaker.record_failure():
-                raise WarmingInterrupted(
-                    f"{breaker.limit} transcript fetches failed in a row with no success "
-                    f"(last: {creator.creator_id}/{video.video_id}) — this looks like an "
-                    f"environmental block, not {breaker.limit} caption-less videos",
-                    outcomes,
-                )
+                if source == "gemini":
+                    breaker_reason = (
+                        f"{breaker.limit} transcript fetches failed in a row with no success "
+                        f"(last: {creator.creator_id}/{video.video_id}) — likely the Gemini API "
+                        "is down or the free tier's 8-hours-of-video-per-day cap is exhausted"
+                    )
+                else:
+                    breaker_reason = (
+                        f"{breaker.limit} transcript fetches failed in a row with no success "
+                        f"(last: {creator.creator_id}/{video.video_id}) — this looks like an "
+                        f"environmental block, not {breaker.limit} caption-less videos"
+                    )
+                raise WarmingInterrupted(breaker_reason, outcomes)
             continue
 
         save_transcript(transcript, dir=dir)
@@ -410,6 +466,7 @@ def run_warm_cache(
     dir: Path = DEFAULT_TRANSCRIPT_DIR,
     creator_ids: list[str] | None = None,
     dry_run: bool = False,
+    source: TranscriptSource = DEFAULT_TRANSCRIPT_SOURCE,
     delay_seconds: float = DEFAULT_FETCH_DELAY_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> WarmCacheRunSummary:
@@ -442,6 +499,7 @@ def run_warm_cache(
                 max_per_creator,
                 dir,
                 dry_run,
+                source=source,
                 delay_seconds=delay_seconds,
                 breaker=breaker,
                 sleep=sleep,
@@ -567,13 +625,20 @@ def main(argv: list[str] | None = None) -> int:
         help="list what would be fetched without fetching any transcript",
     )
     parser.add_argument(
+        "--source",
+        choices=TRANSCRIPT_SOURCES,
+        default=DEFAULT_TRANSCRIPT_SOURCE,
+        help=SOURCE_ARG_HELP,
+    )
+    parser.add_argument(
         "--delay",
         type=float,
         default=DEFAULT_FETCH_DELAY_SECONDS,
         help=(
-            f"seconds to wait between transcript fetches that hit the network "
-            f"(default {DEFAULT_FETCH_DELAY_SECONDS}; 0 disables). The first unthrottled "
-            f"run pulled 34 transcripts in 59s and was IP-blocked."
+            f"seconds to wait between transcript fetches that hit the network, applies to "
+            f"--source captions only (default {DEFAULT_FETCH_DELAY_SECONDS}; 0 disables). "
+            f"The first unthrottled captions run pulled 34 transcripts in 59s and was "
+            f"IP-blocked."
         ),
     )
     args = parser.parse_args(argv)
@@ -582,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
 
     since = parse_since(args.since) if args.since else default_since()
 
-    # `extract/run_extract.py` calls `fetch_transcript` with no dir argument,
+    # `extract/run_extract.py` calls `fetch_transcript_from` with no dir argument,
     # so it can only ever read DEFAULT_TRANSCRIPT_DIR. Warming somewhere else
     # produces a cache the paid extraction stage cannot see — silently.
     if args.dir.resolve() != DEFAULT_TRANSCRIPT_DIR.resolve():
@@ -599,6 +664,7 @@ def main(argv: list[str] | None = None) -> int:
         dir=args.dir,
         creator_ids=args.creator_ids,
         dry_run=args.dry_run,
+        source=args.source,
         delay_seconds=0.0 if args.dry_run else args.delay,
     )
     print_summary(summary)

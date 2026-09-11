@@ -17,7 +17,14 @@ from pydantic import BaseModel
 from rich.console import Console
 from rich.table import Table
 
-from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript, save_transcript
+from fpl_oracle.ingest.sourcing import (
+    DEFAULT_TRANSCRIPT_SOURCE,
+    SOURCE_ARG_HELP,
+    TRANSCRIPT_SOURCES,
+    TranscriptSource,
+    fetch_transcript_from,
+)
+from fpl_oracle.ingest.transcripts import Transcript, save_transcript
 from fpl_oracle.ingest.youtube_client import (
     VideoInfo,
     YouTubeApiError,
@@ -125,7 +132,11 @@ def filter_min_duration(
     return [v for v in videos if durations.get(v.video_id, min_duration_s) >= min_duration_s]
 
 
-def ingest_one(creator: Creator, registry: list[Creator]) -> IngestedTranscript | None:
+def ingest_one(
+    creator: Creator,
+    registry: list[Creator],
+    source: TranscriptSource = DEFAULT_TRANSCRIPT_SOURCE,
+) -> IngestedTranscript | None:
     """List a creator's recent videos, attribute them per the shared-channel
     rule (a no-op for creators with a personal channel), and fetch+save a
     transcript for the most recent attributed one that has an English
@@ -174,7 +185,9 @@ def ingest_one(creator: Creator, registry: list[Creator]) -> IngestedTranscript 
         return None
 
     for video in selectable:
-        transcript = fetch_transcript(video.video_id)
+        transcript = fetch_transcript_from(
+            video.video_id, source, duration_seconds=durations.get(video.video_id)
+        )
         if transcript is None:
             print(
                 f"run_ingest: no transcript for '{video.title}' ({video.video_id}) — "
@@ -220,14 +233,27 @@ def print_summary(results: list[IngestedTranscript]) -> None:
     console.print(table)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Fetch+save transcripts for a handful of eligible creators (Phase 1 demo)"
+    )
+    parser.add_argument(
+        "--source",
+        choices=TRANSCRIPT_SOURCES,
+        default=DEFAULT_TRANSCRIPT_SOURCE,
+        help=SOURCE_ARG_HELP,
+    )
+    args = parser.parse_args(argv)
+
     candidates = eligible_creators(REGISTRY)
     results: list[IngestedTranscript] = []
 
     for creator in candidates:
         if len(results) >= TARGET_TRANSCRIPT_COUNT:
             break
-        result = ingest_one(creator, REGISTRY)
+        result = ingest_one(creator, REGISTRY, args.source)
         if result is not None:
             results.append(result)
 

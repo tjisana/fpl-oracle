@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 import anthropic
+import httpx
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from youtube_transcript_api import RequestBlocked, YouTubeRequestFailed
 
@@ -44,7 +45,14 @@ from fpl_oracle.ingest.run_ingest import (
     filter_min_duration,
     videos_for_creator,
 )
-from fpl_oracle.ingest.transcripts import Transcript, fetch_transcript, load_transcript
+from fpl_oracle.ingest.sourcing import (
+    DEFAULT_TRANSCRIPT_SOURCE,
+    SOURCE_ARG_HELP,
+    TRANSCRIPT_SOURCES,
+    TranscriptSource,
+    fetch_transcript_from,
+)
+from fpl_oracle.ingest.transcripts import Transcript, load_transcript, save_transcript
 from fpl_oracle.ingest.youtube_client import (
     VideoInfo,
     YouTubeApiError,
@@ -404,8 +412,31 @@ def _reuse_existing(
         return None
 
 
+def _durations_for(candidates: list[VideoInfo], creator_id: str) -> dict[str, int]:
+    """Look up durations for `candidates`, non-fatally — same pattern as
+    `warm_cache._durations_for`. Only needed on the gemini path, to
+    validate Gemini's segment timings (see `gemini_transcripts`).
+
+    Catches `httpx.HTTPError` (connection errors, timeouts) alongside
+    `YouTubeApiError` (a non-2xx response) — `YouTubeApiError` does NOT
+    subclass it, so a transport failure would otherwise escape uncaught
+    and abort the whole extraction run on the new gemini-default path."""
+    try:
+        return get_video_durations([v.video_id for v in candidates])
+    except (YouTubeApiError, httpx.HTTPError) as e:
+        logger.warning(
+            "run_extract: %s — duration lookup failed (%s); proceeding without durations",
+            creator_id,
+            e,
+        )
+        return {}
+
+
 def _resolve_transcript(
-    candidates: list[VideoInfo], creator_id: str
+    candidates: list[VideoInfo],
+    creator_id: str,
+    source: TranscriptSource = DEFAULT_TRANSCRIPT_SOURCE,
+    durations: dict[str, int] | None = None,
 ) -> tuple[VideoInfo | None, Transcript | None, bool]:
     """Walk `candidates` newest-first and return the first (video,
     transcript) pair we can actually read, plus whether a block was hit.
@@ -418,7 +449,8 @@ def _resolve_transcript(
     Once a block is seen we stop making network calls for this creator and
     consider only videos already on disk. That is the important
     constraint: falling back must never mean throwing MORE requests at an
-    active block, which is what prolongs it.
+    active block, which is what prolongs it. Only `source="captions"` can
+    raise the block in the first place — gemini never raises.
     """
     blocked = False
     for video in candidates:
@@ -428,7 +460,9 @@ def _resolve_transcript(
         if blocked:
             continue  # network is off-limits; keep scanning for a cached one
         try:
-            fetched = fetch_transcript(video.video_id)
+            fetched = fetch_transcript_from(
+                video.video_id, source, duration_seconds=(durations or {}).get(video.video_id)
+            )
         except (RequestBlocked, YouTubeRequestFailed) as e:
             logger.warning(
                 "run_extract: %s — transcript BLOCKED (%s); falling back to cached videos only",
@@ -438,6 +472,13 @@ def _resolve_transcript(
             blocked = True
             continue
         if fetched is not None:
+            # A network fetch (gemini in particular: 30-90s per video) must
+            # be saved to the on-disk cache, not just handed to the caller —
+            # otherwise a retry of this creator (or tomorrow's warm_cache
+            # run) pays the same fetch again. `fetch_transcript_from` itself
+            # only READS the cache; saving is the caller's job, same as
+            # warm_cache.warm_creator already does.
+            save_transcript(fetched)
             return video, fetched, blocked
     return None, None, blocked
 
@@ -521,6 +562,7 @@ def run_extraction(
     creator_ids: list[str] | None = None,
     force_refresh: bool = False,
     force: bool = False,
+    source: TranscriptSource = DEFAULT_TRANSCRIPT_SOURCE,
 ) -> ExtractionRunSummary:
     """Extract + resolve across all eligible creators' `gameweek` videos
     (see `is_gameweek_video` for what qualifies, gated by
@@ -582,7 +624,12 @@ def run_extraction(
                 resolved.append(reused)
                 continue
 
-            video, transcript, was_blocked = _resolve_transcript(sel.candidates, creator.creator_id)
+            durations = (
+                _durations_for(sel.candidates, creator.creator_id) if source == "gemini" else {}
+            )
+            video, transcript, was_blocked = _resolve_transcript(
+                sel.candidates, creator.creator_id, source, durations
+            )
             if video is None or transcript is None:
                 reason = (
                     "transcript blocked and no cached fallback"
@@ -717,6 +764,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="re-extract even if data/extractions/{video_id}.json already exists",
     )
+    parser.add_argument(
+        "--source",
+        choices=TRANSCRIPT_SOURCES,
+        default=DEFAULT_TRANSCRIPT_SOURCE,
+        help=SOURCE_ARG_HELP,
+    )
     args = parser.parse_args(argv)
 
     configure_logging()
@@ -738,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
         creator_ids=args.creator_ids or None,
         force=args.force,
         force_refresh=args.force_refresh,
+        source=args.source,
     )
     print(
         f"extracted {summary.succeeded}/{summary.attempted} creators "

@@ -23,9 +23,16 @@ detection, no IP block. Two properties matter beyond that:
 WHAT IT IS NOT. The YouTube-URL feature is in PREVIEW and free of charge
 for now, with pricing and limits explicitly subject to change; the free
 tier caps at 8 hours of video per day. This is a governed dependency
-rather than a permanent one, and it is deliberately NOT the default path
-— `ingest/transcripts.fetch_transcript` still is. Use this as a fallback
-when scraping is blocked, or deliberately per-creator.
+rather than a permanent one.
+
+As of 2026-09-10 this IS the default transcript source, via
+`ingest/sourcing.fetch_transcript_from` — see that module's docstring for
+why: `ingest/transcripts.fetch_transcript`'s caption scrape has IP-blocked
+this machine three gameweeks running, while Gemini is supported access
+with no bot detection and (on GW2) resolved more picks by name. The
+caption scraper is kept as an explicit opt-in (`source="captions"`) for
+callers that need its real per-word timestamps and are willing to risk
+the block — see `sourcing.py`.
 
 TIMESTAMPS ARE REQUESTED, VALIDATED, AND USUALLY DISCARDED. Segment
 timings power the report's timestamped YouTube deep links — the evidence

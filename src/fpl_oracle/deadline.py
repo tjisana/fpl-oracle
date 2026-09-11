@@ -73,6 +73,11 @@ from fpl_oracle.extract.run_extract import resolve_target_gameweek, run_extracti
 from fpl_oracle.fpl.players import PlayerDB
 from fpl_oracle.ingest.run_ingest import TARGET_TRANSCRIPT_COUNT, eligible_creators
 from fpl_oracle.ingest.run_ingest import main as ingest_main
+from fpl_oracle.ingest.sourcing import (
+    DEFAULT_TRANSCRIPT_SOURCE,
+    SOURCE_ARG_HELP,
+    TRANSCRIPT_SOURCES,
+)
 from fpl_oracle.logging_setup import configure_logging
 from fpl_oracle.pipeline import DEFAULT_RUNS_DIR, SquadDiff, fetch_my_squad_summary, run_pipeline
 from fpl_oracle.roster.registry import REGISTRY
@@ -262,6 +267,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="target gameweek for re-extraction (default: the FPL API's next event)",
     )
+    parser.add_argument(
+        "--source",
+        choices=TRANSCRIPT_SOURCES,
+        default=DEFAULT_TRANSCRIPT_SOURCE,
+        help=SOURCE_ARG_HELP,
+    )
     args = parser.parse_args(argv)
 
     # Without this the root logger sits at WARNING with no handlers, so every
@@ -286,7 +297,9 @@ def main(argv: list[str] | None = None) -> int:
         # signal for this rerun. Stage 2 refreshes every creator's video
         # itself, so a failure here costs nothing but a warm cache.
         try:
-            rc = _run_stage("1/3 warm transcript cache (ingest)", ingest_main)
+            rc = _run_stage(
+                "1/3 warm transcript cache (ingest)", ingest_main, ["--source", args.source]
+            )
             if rc != 0:
                 print(
                     f"\nWARNING: ingest exited with code {rc} — continuing anyway. "
@@ -312,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
                 gameweek,
                 published_after,
                 force_refresh=True,
+                source=args.source,
             )
             print(
                 f"   extracted {summary.succeeded}/{summary.attempted} creators "

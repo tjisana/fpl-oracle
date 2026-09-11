@@ -1,13 +1,20 @@
 """Tests for ingest/warm_cache.py — pure logic and wiring only, all network
-functions (list_recent_videos, get_video_durations, fetch_transcript,
+functions (list_recent_videos, get_video_durations, fetch_transcript_from,
 save_transcript, load_transcript) faked. No live network. Follows the
-fakes-injected pattern in tests/test_attribution.py."""
+fakes-injected pattern in tests/test_attribution.py.
+
+Most of these tests exercise the caption-scrape-specific behaviour (sleep
+throttling, RequestBlocked propagation, the caption-flavoured breaker
+message) that predates the gemini/captions split, so they pass
+`source="captions"` explicitly to keep testing exactly that path. Tests
+specific to the gemini-default behaviour live in their own classes below."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from youtube_transcript_api import RequestBlocked
 
@@ -175,6 +182,30 @@ class TestVideosToWarm:
 
         assert [v.video_id for v in result] == ["v1"]
 
+    def test_duration_lookup_transport_error_is_non_fatal(self, monkeypatch) -> None:
+        """`YouTubeApiError` (a non-2xx response) is not the only way a
+        duration lookup can fail — a connection error or timeout raises
+        `httpx.ConnectError`/`httpx.HTTPError`, which does NOT subclass
+        `YouTubeApiError`. Either must leave the run running, not abort it —
+        this is the new default (gemini) path's equivalent of the
+        quota-blip case above."""
+        creator = _creator("solo")
+        video = _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))
+        monkeypatch.setattr(
+            warm_cache, "list_recent_videos", lambda channel_id, max_results: [video]
+        )
+
+        def failing_durations(ids):
+            raise httpx.ConnectError("connection refused")
+
+        monkeypatch.setattr(warm_cache, "get_video_durations", failing_durations)
+
+        result = videos_to_warm(
+            creator, [creator], since=datetime(2026, 8, 1, tzinfo=UTC), max_per_creator=5
+        )
+
+        assert [v.video_id for v in result] == ["v1"]
+
 
 class TestWarmCreator:
     def test_dry_run_makes_zero_transcript_calls(self, monkeypatch, tmp_path: Path) -> None:
@@ -189,9 +220,9 @@ class TestWarmCreator:
         monkeypatch.setattr(warm_cache, "load_transcript", fake_load_transcript)
 
         def boom(*a, **k):
-            raise AssertionError("fetch_transcript must not be called during --dry-run")
+            raise AssertionError("fetch_transcript_from must not be called during --dry-run")
 
-        monkeypatch.setattr(warm_cache, "fetch_transcript", boom)
+        monkeypatch.setattr(warm_cache, "fetch_transcript_from", boom)
         monkeypatch.setattr(warm_cache, "save_transcript", boom)
 
         summary = warm_creator(
@@ -201,6 +232,7 @@ class TestWarmCreator:
             max_per_creator=5,
             dir=tmp_path,
             dry_run=True,
+            source="captions",
         )
 
         assert summary.considered == 2
@@ -232,14 +264,14 @@ class TestWarmCreator:
 
         monkeypatch.setattr(warm_cache, "load_transcript", fake_load_transcript)
 
-        def fake_fetch_transcript(video_id, dir):
+        def fake_fetch_transcript(video_id, source, *, dir, duration_seconds=None):
             if video_id == "fetchable":
                 return _transcript(video_id)
             if video_id == "no-transcript":
                 return None
             raise AssertionError(f"unexpected fetch for {video_id} (already cached)")
 
-        monkeypatch.setattr(warm_cache, "fetch_transcript", fake_fetch_transcript)
+        monkeypatch.setattr(warm_cache, "fetch_transcript_from", fake_fetch_transcript)
 
         saved: list[str] = []
         monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: saved.append(t.video_id))
@@ -251,6 +283,7 @@ class TestWarmCreator:
             max_per_creator=5,
             dir=tmp_path,
             dry_run=False,
+            source="captions",
         )
 
         assert summary.considered == 3
@@ -294,7 +327,7 @@ class TestWarmCreator:
         def blocked(*a, **k):
             raise RequestBlocked(video_id="v1")
 
-        monkeypatch.setattr(warm_cache, "fetch_transcript", blocked)
+        monkeypatch.setattr(warm_cache, "fetch_transcript_from", blocked)
 
         with pytest.raises(warm_cache.WarmingInterrupted) as excinfo:
             warm_creator(
@@ -304,6 +337,7 @@ class TestWarmCreator:
                 max_per_creator=5,
                 dir=tmp_path,
                 dry_run=False,
+                source="captions",
                 delay_seconds=0.0,
             )
         assert "RequestBlocked" in excinfo.value.reason
@@ -408,7 +442,11 @@ class TestThrottle:
         ]
         monkeypatch.setattr(warm_cache, "videos_to_warm", lambda *a, **k: videos)
         monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
-        monkeypatch.setattr(warm_cache, "fetch_transcript", lambda vid, dir: _transcript(vid))
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: _transcript(vid),
+        )
         monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
         slept: list[float] = []
 
@@ -419,6 +457,7 @@ class TestThrottle:
             5,
             tmp_path,
             False,
+            source="captions",
             delay_seconds=2.0,
             sleep=slept.append,
         )
@@ -444,6 +483,7 @@ class TestThrottle:
             5,
             tmp_path,
             False,
+            source="captions",
             delay_seconds=2.0,
             sleep=slept.append,
         )
@@ -467,6 +507,7 @@ class TestThrottle:
             5,
             tmp_path,
             True,
+            source="captions",
             delay_seconds=2.0,
             sleep=slept.append,
         )
@@ -475,11 +516,13 @@ class TestThrottle:
 
 
 class TestCircuitBreaker:
-    """`fetch_transcript` returns None (not an exception) for anti-bot
+    """`fetch_transcript_from` returns None (not an exception) for anti-bot
     states like PoTokenRequired and YouTubeDataUnparsable, which are
-    CouldNotRetrieveTranscript subclasses outside its re-raise set. Without
-    a breaker a blocked run marks EVERY video 'no transcript available',
-    exits 0, and looks finished."""
+    CouldNotRetrieveTranscript subclasses outside its re-raise set (captions
+    path) — or simply because Gemini gave up after its retries (gemini
+    path). Without a breaker a blocked run marks EVERY video 'no transcript
+    available'/'gemini could not read the video', exits 0, and looks
+    finished."""
 
     def test_trips_after_consecutive_failures_with_no_success(
         self, monkeypatch, tmp_path: Path
@@ -494,7 +537,11 @@ class TestCircuitBreaker:
             ],
         )
         monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
-        monkeypatch.setattr(warm_cache, "fetch_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: None,
+        )
 
         with pytest.raises(warm_cache.WarmingInterrupted) as excinfo:
             warm_creator(
@@ -504,11 +551,13 @@ class TestCircuitBreaker:
                 5,
                 tmp_path,
                 False,
+                source="captions",
                 delay_seconds=0.0,
                 breaker=warm_cache._FailureStreak(),
             )
 
         assert "in a row" in excinfo.value.reason
+        assert "caption-less videos" in excinfo.value.reason
         # the outcomes recorded before tripping are carried out, not lost
         assert len(excinfo.value.outcomes) == warm_cache.CONSECUTIVE_FAILURE_LIMIT
 
@@ -534,7 +583,11 @@ class TestCircuitBreaker:
             ],
         )
         monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
-        monkeypatch.setattr(warm_cache, "fetch_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: None,
+        )
 
         summary = warm_creator(
             creator,
@@ -543,6 +596,7 @@ class TestCircuitBreaker:
             5,
             tmp_path,
             False,
+            source="captions",
             delay_seconds=0.0,
             breaker=warm_cache._FailureStreak(),
         )
@@ -571,15 +625,18 @@ class TestPartialProgressIsPreserved:
         monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
         monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
 
-        def fetch(vid, dir):
+        def fetch(vid, source, *, dir, duration_seconds=None):
             if vid == "v3":
                 raise RequestBlocked(video_id=vid)
             return _transcript(vid)
 
-        monkeypatch.setattr(warm_cache, "fetch_transcript", fetch)
+        monkeypatch.setattr(warm_cache, "fetch_transcript_from", fetch)
 
         result = run_warm_cache(
-            since=datetime(2026, 8, 1, tzinfo=UTC), delay_seconds=0.0, sleep=lambda _: None
+            since=datetime(2026, 8, 1, tzinfo=UTC),
+            source="captions",
+            delay_seconds=0.0,
+            sleep=lambda _: None,
         )
 
         assert result.blocked is True
@@ -634,8 +691,10 @@ class TestDirIsHonoured:
         )
         monkeypatch.setattr(
             warm_cache,
-            "fetch_transcript",
-            lambda vid, dir: seen["fetch"].append(dir) or _transcript(vid),
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: (
+                seen["fetch"].append(dir) or _transcript(vid)
+            ),
         )
         monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: seen["save"].append(dir))
 
@@ -646,6 +705,7 @@ class TestDirIsHonoured:
             5,
             target,
             False,
+            source="captions",
             delay_seconds=0.0,
         )
 
@@ -697,3 +757,174 @@ class TestMain:
         )
         warm_cache.main(["--dry-run", "--delay", "5"])
         assert seen["delay_seconds"] == 0.0, "a dry run makes no network calls, so never waits"
+
+    def test_source_flag_reaches_run_warm_cache(self, monkeypatch) -> None:
+        seen: dict = {}
+
+        def fake_run(**kwargs):
+            seen.update(kwargs)
+            return warm_cache.WarmCacheRunSummary(creators=[], dry_run=False, total_creators=0)
+
+        monkeypatch.setattr(warm_cache, "run_warm_cache", fake_run)
+        warm_cache.main([])
+        assert seen["source"] == "gemini", "gemini is the default source"
+
+        warm_cache.main(["--source", "captions"])
+        assert seen["source"] == "captions"
+
+
+class TestGeminiIsDefault:
+    """Gemini is the default transcript source (see sourcing.py's module
+    docstring for why): never IP-blocked, so `warm_creator`/`run_warm_cache`
+    must use it without the caller asking, must not apply the
+    captions-only throttle, and must fail/report distinctly from a caption
+    scrape miss."""
+
+    def test_default_source_reaches_fetch_transcript_from(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        creator = _creator("a")
+        video = _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))
+        monkeypatch.setattr(warm_cache, "videos_to_warm", lambda *a, **k: [video])
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
+        monkeypatch.setattr(warm_cache, "get_video_durations", lambda ids: {"v1": 300})
+        seen_sources: list[str] = []
+
+        def fake_fetch(vid, source, *, dir, duration_seconds=None):
+            seen_sources.append(source)
+            return _transcript(vid)
+
+        monkeypatch.setattr(warm_cache, "fetch_transcript_from", fake_fetch)
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=0.0,
+        )
+
+        assert seen_sources == ["gemini"]
+
+    def test_gemini_never_sleeps_even_with_delay(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        videos = [
+            _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+            _video("v2", published_at=datetime(2026, 8, 25, tzinfo=UTC)),
+        ]
+        monkeypatch.setattr(warm_cache, "videos_to_warm", lambda *a, **k: videos)
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
+        monkeypatch.setattr(warm_cache, "get_video_durations", lambda ids: {"v1": 300, "v2": 300})
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: _transcript(vid),
+        )
+        slept: list[float] = []
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=2.0,
+            sleep=slept.append,
+        )
+
+        assert slept == [], "gemini has its own per-video latency; the scrape throttle is moot"
+
+    def test_gemini_none_is_recorded_with_gemini_specific_reason(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        creator = _creator("a")
+        video = _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))
+        monkeypatch.setattr(warm_cache, "videos_to_warm", lambda *a, **k: [video])
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "get_video_durations", lambda ids: {"v1": 300})
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: None,
+        )
+
+        summary = warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=0.0,
+        )
+
+        assert summary.failed == 1
+        (outcome,) = summary.videos
+        assert outcome.failure_reason == "gemini could not read the video"
+
+    def test_breaker_trip_message_is_gemini_flavoured(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        n = warm_cache.CONSECUTIVE_FAILURE_LIMIT
+        monkeypatch.setattr(
+            warm_cache,
+            "videos_to_warm",
+            lambda *a, **k: [
+                _video(f"v{i}", published_at=datetime(2026, 8, 25, tzinfo=UTC)) for i in range(n)
+            ],
+        )
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(
+            warm_cache, "get_video_durations", lambda ids: {vid: 300 for vid in ids}
+        )
+        monkeypatch.setattr(
+            warm_cache,
+            "fetch_transcript_from",
+            lambda vid, source, *, dir, duration_seconds=None: None,
+        )
+
+        with pytest.raises(warm_cache.WarmingInterrupted) as excinfo:
+            warm_creator(
+                creator,
+                [creator],
+                datetime(2026, 8, 1, tzinfo=UTC),
+                5,
+                tmp_path,
+                False,
+                delay_seconds=0.0,
+                breaker=warm_cache._FailureStreak(),
+            )
+
+        assert "Gemini API is down" in excinfo.value.reason
+        assert "8-hours-of-video-per-day" in excinfo.value.reason
+
+    def test_durations_are_passed_through_to_the_fetch(self, monkeypatch, tmp_path: Path) -> None:
+        creator = _creator("a")
+        video = _video("v1", published_at=datetime(2026, 8, 25, tzinfo=UTC))
+        monkeypatch.setattr(warm_cache, "videos_to_warm", lambda *a, **k: [video])
+        monkeypatch.setattr(warm_cache, "load_transcript", lambda vid, dir: None)
+        monkeypatch.setattr(warm_cache, "save_transcript", lambda t, dir: None)
+        monkeypatch.setattr(warm_cache, "get_video_durations", lambda ids: {"v1": 483})
+        seen_durations: list[float | None] = []
+
+        def fake_fetch(vid, source, *, dir, duration_seconds=None):
+            seen_durations.append(duration_seconds)
+            return _transcript(vid)
+
+        monkeypatch.setattr(warm_cache, "fetch_transcript_from", fake_fetch)
+
+        warm_creator(
+            creator,
+            [creator],
+            datetime(2026, 8, 1, tzinfo=UTC),
+            5,
+            tmp_path,
+            False,
+            delay_seconds=0.0,
+        )
+
+        assert seen_durations == [483]

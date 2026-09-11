@@ -111,7 +111,7 @@ def _patch_happy_path(monkeypatch, tmp_path: Path, captured: dict | None = None)
             captured.update(kwargs)
         return _fake_result()
 
-    monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+    monkeypatch.setattr(deadline, "ingest_main", lambda argv=None: 0)
     monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
     monkeypatch.setattr(
         deadline,
@@ -194,7 +194,7 @@ class TestStageSkipping:
         assert rc == 0
 
     def test_skip_extract_never_calls_extract(self, monkeypatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+        monkeypatch.setattr(deadline, "ingest_main", lambda argv=None: 0)
         monkeypatch.setattr(
             deadline, "run_extraction", _raiser(AssertionError("run_extraction called"))
         )
@@ -279,6 +279,54 @@ class TestVideoRefreshWiring:
         assert captured.get("force_refresh") is True
 
 
+class TestSourceWiring:
+    """`--source` must reach BOTH stage 1 (ingest_main, which has its own
+    argparse and is invoked with an argv list) and stage 2 (run_extraction,
+    called with keyword arguments) — see deadline.py's main()."""
+
+    def test_source_flag_reaches_both_ingest_and_extract(self, monkeypatch, tmp_path: Path) -> None:
+        captured_ingest_argv: list = []
+        captured_extract_kwargs: dict = {}
+
+        def fake_ingest_main(argv=None):
+            captured_ingest_argv.extend(argv or [])
+            return 0
+
+        def fake_run_extraction(*args, **kwargs):
+            captured_extract_kwargs.update(kwargs)
+            return _fake_extract_summary(tmp_path / "mq.md")
+
+        _patch_happy_path(monkeypatch, tmp_path)
+        monkeypatch.setattr(deadline, "ingest_main", fake_ingest_main)
+        monkeypatch.setattr(deadline, "run_extraction", fake_run_extraction)
+
+        deadline.main(["--source", "captions", "--no-nuance"])
+
+        assert captured_ingest_argv == ["--source", "captions"]
+        assert captured_extract_kwargs.get("source") == "captions"
+
+    def test_source_defaults_to_gemini(self, monkeypatch, tmp_path: Path) -> None:
+        captured_ingest_argv: list = []
+        captured_extract_kwargs: dict = {}
+
+        def fake_ingest_main(argv=None):
+            captured_ingest_argv.extend(argv or [])
+            return 0
+
+        def fake_run_extraction(*args, **kwargs):
+            captured_extract_kwargs.update(kwargs)
+            return _fake_extract_summary(tmp_path / "mq.md")
+
+        _patch_happy_path(monkeypatch, tmp_path)
+        monkeypatch.setattr(deadline, "ingest_main", fake_ingest_main)
+        monkeypatch.setattr(deadline, "run_extraction", fake_run_extraction)
+
+        deadline.main(["--no-nuance"])
+
+        assert captured_ingest_argv == ["--source", "gemini"]
+        assert captured_extract_kwargs.get("source") == "gemini"
+
+
 class TestStageFailures:
     def test_ingest_raising_is_warned_but_never_aborts_the_run(
         self, monkeypatch, tmp_path: Path, capsys
@@ -304,7 +352,7 @@ class TestStageFailures:
         """run_ingest exits 1 whenever it saves fewer than its 3-transcript
         target — routine, and not a signal that this rerun is unhealthy."""
         _patch_happy_path(monkeypatch, tmp_path)
-        monkeypatch.setattr(deadline, "ingest_main", lambda: 1)
+        monkeypatch.setattr(deadline, "ingest_main", lambda argv=None: 1)
 
         rc = deadline.main(["--no-nuance"])
 
@@ -413,7 +461,7 @@ class TestStageFailures:
         marker.parent.mkdir(parents=True)
         marker.write_text("{}")
 
-        monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+        monkeypatch.setattr(deadline, "ingest_main", lambda argv=None: 0)
         monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
         monkeypatch.setattr(
             deadline,
@@ -509,7 +557,7 @@ class TestFinalSummaryReadsResultDiff:
         def fake_print_final_summary(result, diff, db):
             captured["diff"] = diff
 
-        monkeypatch.setattr(deadline, "ingest_main", lambda: 0)
+        monkeypatch.setattr(deadline, "ingest_main", lambda argv=None: 0)
         monkeypatch.setattr(deadline, "resolve_target_gameweek", lambda *a, **k: (2, None))
         monkeypatch.setattr(
             deadline, "run_extraction", lambda *a, **k: _fake_extract_summary(tmp_path / "mq.md")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from fpl_oracle.extract import run_extract
@@ -444,8 +445,11 @@ class TestMainGameweekWiring:
 # stops a mid-run retry from re-billing every creator: cold run pays,
 # a warm run (extraction already on disk) does NOT call Claude again unless
 # --force, a corrupt cache file is treated as a miss (never aborts the run),
-# and writes are atomic. video selection, fetch_transcript, extract_picks,
-# and PlayerDB are all faked — no network, no Anthropic calls.
+# and writes are atomic. video selection, fetch_transcript_from, extract_picks,
+# and PlayerDB are all faked — no network, no Anthropic calls. These pass
+# source="captions" explicitly so a faked fetch_transcript_from is the only
+# transcript-layer call; the gemini path's extra duration lookup is covered
+# separately in TestResolveTranscriptSourceDefault below.
 # ---------------------------------------------------------------------------
 
 
@@ -503,8 +507,12 @@ class TestRunExtractionSkipIfRecent:
             "select_videos",
             _fake_select_videos([VideoSelection(creator=creator, video=video, error=None)]),
         )
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
         monkeypatch.setattr(
-            run_extract, "fetch_transcript", lambda video_id: _transcript_fixture(video_id)
+            run_extract,
+            "fetch_transcript_from",
+            lambda video_id, source, *, duration_seconds=None: _transcript_fixture(video_id),
         )
         calls: list[str] = []
 
@@ -515,7 +523,9 @@ class TestRunExtractionSkipIfRecent:
         monkeypatch.setattr(run_extract, "extract_picks", fake_extract_picks)
         monkeypatch.setattr(PlayerDB, "load", classmethod(lambda cls, force_refresh=False: db))
 
-        summary = run_extract.run_extraction(gameweek=2, published_after=None, output_dir=tmp_path)
+        summary = run_extract.run_extraction(
+            gameweek=2, published_after=None, output_dir=tmp_path, source="captions"
+        )
 
         assert calls == ["andy"]
         assert summary.skipped == []
@@ -542,13 +552,15 @@ class TestRunExtractionSkipIfRecent:
             raise AssertionError("extract_picks must NOT be called on a warm skip")
 
         def boom_transcript(*a, **k):
-            raise AssertionError("fetch_transcript must NOT be called on a warm skip")
+            raise AssertionError("fetch_transcript_from must NOT be called on a warm skip")
 
         monkeypatch.setattr(run_extract, "extract_picks", boom_extract)
-        monkeypatch.setattr(run_extract, "fetch_transcript", boom_transcript)
+        monkeypatch.setattr(run_extract, "fetch_transcript_from", boom_transcript)
         monkeypatch.setattr(PlayerDB, "load", classmethod(lambda cls, force_refresh=False: db))
 
-        summary = run_extract.run_extraction(gameweek=2, published_after=None, output_dir=tmp_path)
+        summary = run_extract.run_extraction(
+            gameweek=2, published_after=None, output_dir=tmp_path, source="captions"
+        )
 
         assert summary.skipped == ["andy"]
         assert summary.skip_count == 1
@@ -568,8 +580,12 @@ class TestRunExtractionSkipIfRecent:
             extraction=_resolved_extraction("andy", "vid1"), resolutions=[]
         )
         (tmp_path / "vid1.json").write_text(existing.model_dump_json())
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
         monkeypatch.setattr(
-            run_extract, "fetch_transcript", lambda video_id: _transcript_fixture(video_id)
+            run_extract,
+            "fetch_transcript_from",
+            lambda video_id, source, *, duration_seconds=None: _transcript_fixture(video_id),
         )
         calls: list[str] = []
 
@@ -581,7 +597,7 @@ class TestRunExtractionSkipIfRecent:
         monkeypatch.setattr(PlayerDB, "load", classmethod(lambda cls, force_refresh=False: db))
 
         summary = run_extract.run_extraction(
-            gameweek=2, published_after=None, output_dir=tmp_path, force=True
+            gameweek=2, published_after=None, output_dir=tmp_path, force=True, source="captions"
         )
 
         assert calls == ["andy"]
@@ -606,8 +622,12 @@ class TestRunExtractionSkipIfRecent:
         )
         # Truncated/corrupt — as a Ctrl-C or sleeping laptop mid-write would leave it.
         (tmp_path / "vid1.json").write_text('{"extraction": {"video_id": "vid1", trunc')
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
         monkeypatch.setattr(
-            run_extract, "fetch_transcript", lambda video_id: _transcript_fixture(video_id)
+            run_extract,
+            "fetch_transcript_from",
+            lambda video_id, source, *, duration_seconds=None: _transcript_fixture(video_id),
         )
         calls: list[str] = []
 
@@ -618,7 +638,9 @@ class TestRunExtractionSkipIfRecent:
         monkeypatch.setattr(run_extract, "extract_picks", fake_extract_picks)
         monkeypatch.setattr(PlayerDB, "load", classmethod(lambda cls, force_refresh=False: db))
 
-        summary = run_extract.run_extraction(gameweek=2, published_after=None, output_dir=tmp_path)
+        summary = run_extract.run_extraction(
+            gameweek=2, published_after=None, output_dir=tmp_path, source="captions"
+        )
 
         # The corrupt file did not abort the run: both creators were reached.
         assert calls == ["andy", "bob"]
@@ -634,8 +656,12 @@ class TestRunExtractionSkipIfRecent:
             "select_videos",
             _fake_select_videos([VideoSelection(creator=creator, video=video, error=None)]),
         )
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
         monkeypatch.setattr(
-            run_extract, "fetch_transcript", lambda video_id: _transcript_fixture(video_id)
+            run_extract,
+            "fetch_transcript_from",
+            lambda video_id, source, *, duration_seconds=None: _transcript_fixture(video_id),
         )
         monkeypatch.setattr(
             run_extract,
@@ -644,7 +670,148 @@ class TestRunExtractionSkipIfRecent:
         )
         monkeypatch.setattr(PlayerDB, "load", classmethod(lambda cls, force_refresh=False: db))
 
-        run_extract.run_extraction(gameweek=2, published_after=None, output_dir=tmp_path)
+        run_extract.run_extraction(
+            gameweek=2, published_after=None, output_dir=tmp_path, source="captions"
+        )
 
         assert not list(tmp_path.glob("*.json.tmp"))
         assert (tmp_path / "vid1.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Gemini is the default transcript source (see ingest/sourcing.py). These pin
+# that default reaching _resolve_transcript and, from there,
+# fetch_transcript_from — and that run_extraction looks durations up for the
+# gemini path only.
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTranscriptSourceDefault:
+    def test_resolve_transcript_defaults_to_gemini(self, monkeypatch) -> None:
+        video = _video_info("vid1")
+        seen: dict = {}
+
+        def fake_fetch(video_id, source, *, duration_seconds=None):
+            seen["source"] = source
+            seen["duration_seconds"] = duration_seconds
+            return _transcript_fixture(video_id)
+
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(run_extract, "fetch_transcript_from", fake_fetch)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
+
+        video_out, transcript, blocked = run_extract._resolve_transcript([video], "andy")
+
+        assert seen["source"] == "gemini"
+        assert video_out is video
+        assert transcript is not None
+        assert blocked is False
+
+    def test_resolve_transcript_threads_duration_for_the_matching_video(self, monkeypatch) -> None:
+        video = _video_info("vid1")
+        seen: dict = {}
+
+        def fake_fetch(video_id, source, *, duration_seconds=None):
+            seen["duration_seconds"] = duration_seconds
+            return _transcript_fixture(video_id)
+
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(run_extract, "fetch_transcript_from", fake_fetch)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
+
+        run_extract._resolve_transcript([video], "andy", "gemini", {"vid1": 512})
+
+        assert seen["duration_seconds"] == 512
+
+    def test_run_extraction_default_source_looks_up_durations_and_calls_gemini(
+        self, monkeypatch, tmp_path, db
+    ) -> None:
+        creator = _creator_fixture("andy")
+        video = _video_info("vid1")
+        monkeypatch.setattr(
+            run_extract,
+            "select_videos",
+            _fake_select_videos([VideoSelection(creator=creator, video=video, error=None)]),
+        )
+        monkeypatch.setattr(run_extract, "get_video_durations", lambda ids: {"vid1": 400})
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        seen: dict = {}
+
+        def fake_fetch(video_id, source, *, duration_seconds=None):
+            seen["source"] = source
+            seen["duration_seconds"] = duration_seconds
+            return _transcript_fixture(video_id)
+
+        monkeypatch.setattr(run_extract, "fetch_transcript_from", fake_fetch)
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: None)
+        monkeypatch.setattr(
+            run_extract,
+            "extract_picks",
+            lambda *, creator_id, video_id, **kwargs: _resolved_extraction(creator_id, video_id),
+        )
+        monkeypatch.setattr(PlayerDB, "load", classmethod(lambda cls, force_refresh=False: db))
+
+        summary = run_extract.run_extraction(gameweek=2, published_after=None, output_dir=tmp_path)
+
+        assert seen["source"] == "gemini"
+        assert seen["duration_seconds"] == 400
+        assert summary.succeeded == 1
+
+    def test_durations_lookup_transport_error_is_non_fatal(self, monkeypatch) -> None:
+        """Same non-fatal contract as warm_cache._durations_for: a
+        transport-level failure (connection refused, timeout) must not
+        escape `_durations_for` and abort the whole extraction run."""
+
+        def failing_durations(ids):
+            raise httpx.ConnectError("connection refused")
+
+        monkeypatch.setattr(run_extract, "get_video_durations", failing_durations)
+
+        result = run_extract._durations_for([_video_info("vid1")], "andy")
+
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# A network-fetched transcript (gemini in particular: 30-90s per video) must
+# land on disk, not just be handed back to the caller — otherwise a retry of
+# this creator, or tomorrow's warm_cache run, pays for the same fetch again.
+# `fetch_transcript_from` only READS the cache; `_resolve_transcript` is
+# responsible for writing a freshly-fetched one.
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTranscriptSaves:
+    def test_fetched_transcript_is_saved(self, monkeypatch) -> None:
+        video = _video_info("vid1")
+        fetched = _transcript_fixture("vid1")
+        saved: list[Transcript] = []
+
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: None)
+        monkeypatch.setattr(
+            run_extract, "fetch_transcript_from", lambda video_id, source, **k: fetched
+        )
+        monkeypatch.setattr(run_extract, "save_transcript", lambda t: saved.append(t))
+
+        run_extract._resolve_transcript([video], "andy")
+
+        assert saved == [fetched]
+
+    def test_cached_transcript_is_not_re_saved(self, monkeypatch) -> None:
+        video = _video_info("vid1")
+        cached = _transcript_fixture("vid1")
+
+        monkeypatch.setattr(run_extract, "load_transcript", lambda video_id: cached)
+
+        def boom_fetch(*a, **k):
+            raise AssertionError("fetch_transcript_from must not be called on a cache hit")
+
+        def boom_save(*a, **k):
+            raise AssertionError("save_transcript must not be called for an already-cached one")
+
+        monkeypatch.setattr(run_extract, "fetch_transcript_from", boom_fetch)
+        monkeypatch.setattr(run_extract, "save_transcript", boom_save)
+
+        _video_out, transcript, _blocked = run_extract._resolve_transcript([video], "andy")
+
+        assert transcript == cached
