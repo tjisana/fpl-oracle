@@ -74,6 +74,9 @@ MODEL = "gemini-3.5-flash"
 # backoff on a deadline morning.
 MAX_ATTEMPTS = 3
 
+# Per-request timeout in milliseconds (the SDK's unit). See `_client`.
+REQUEST_TIMEOUT_MS = 10 * 60 * 1000
+
 _PROMPT = (
     "Transcribe everything spoken in this video, verbatim, in order.\n"
     "Return timed segments covering the whole video.\n"
@@ -106,8 +109,18 @@ def _client():
             f"{GEMINI_API_KEY_ENV_VAR} is not set — needed to read YouTube video via Gemini"
         )
     from google import genai
+    from google.genai import types
 
-    return genai.Client(api_key=api_key)
+    # A hard per-request timeout. On the GW4 deadline-day run (2026-09-11)
+    # a read failed with ReadError, and the retry then hung for 35+ minutes
+    # with no timeout at all — the SDK's default is none. A 20-minute video
+    # reads in 30-150 s; an 87-minute one in a few minutes. Ten minutes is
+    # generous for any video the free tier can read, and short enough that
+    # a wedged connection costs one retry, not the deadline.
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
 
 
 # Gemini's segment starts may overrun the real video. Anything beyond the

@@ -97,6 +97,24 @@ class TestFetchIsNeverFatal:
         with pytest.raises(RuntimeError, match=gt.GEMINI_API_KEY_ENV_VAR):
             gt._client()
 
+    def test_client_has_a_hard_request_timeout(self, monkeypatch) -> None:
+        """2026-09-11: a retry hung for 35+ minutes on deadline day because
+        the SDK defaults to no timeout. The client must always set one."""
+        monkeypatch.setenv(gt.GEMINI_API_KEY_ENV_VAR, "test-key")
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+        captured: dict = {}
+
+        class _FakeClient:
+            def __init__(self, **kwargs) -> None:
+                captured.update(kwargs)
+
+        from google import genai
+
+        monkeypatch.setattr(genai, "Client", _FakeClient)
+        gt._client()
+        assert captured["http_options"].timeout == gt.REQUEST_TIMEOUT_MS
+        assert gt.REQUEST_TIMEOUT_MS == 10 * 60 * 1000
+
     def test_repeated_failure_returns_none_rather_than_raising(self, monkeypatch) -> None:
         """Matches fetch_transcript's contract so the two are
         interchangeable: a per-video failure never kills the run."""
