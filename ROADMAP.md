@@ -21,11 +21,14 @@ against GW3 points before trusting the GW4 report.
       down. Laptop launchd jobs removed. See `docs/daily-jobs.md`.
 - [x] **Gemini made the default transcript source** (2026-09-10) after the
       third IP block in three gameweeks. See the ADOPTED section below.
-- [ ] **Read the GW4 videos via Gemini.** 18 transcripts (4 creators) were
-      scraped before the 2026-09-10 block. Extraction reads one video per
-      creator: measured 2026-09-11, 14 selected / 5.6 h / 4.2 h uncached —
-      under the free tier's 8 h-of-video-per-day cap, so no paid tier
-      needed. (A full warm at 5 videos/creator would be 22 h; don't.)
+- [x] **Read the GW4 videos via Gemini** (2026-09-11): 8 of 9 uncached
+      selections read in 18 min; 3 of the 8 came back with timings that
+      passed validation (the rest `:untimed`). The 9th, FPL BlackBox's
+      87-minute show, is UNREADABLE on the free tier: the per-MINUTE input
+      cap is 250k tokens and a video costs ~100 tokens/second, so anything
+      over ~40 min 429s on every attempt regardless of the daily cap. The
+      paid tier lifts it (YouTube input is still no-charge in preview).
+      (A full warm at 5 videos/creator would be 22 h; don't.)
 - [ ] **Run extraction, then solve, `--gameweek 4` on both.** Wildcard
       week: read the wildcard-gap line and chip consensus first. See
       `docs/deadline-runbook.md` (GW4 section).
@@ -81,6 +84,10 @@ videos — a laptop-side "timing enrichment" pass from captions is the
 planned fix), and the free tier's 8-hours-of-video-per-day cap (paid tier
 lifts it; the YouTube-URL feature itself is still no-charge in preview).
 The GW4 run doubles as the widened comparison the last bullet asked for.
+Found on the first full run (2026-09-11): the free tier's per-minute
+input cap (250k tokens) makes any video over ~40 minutes unreadable —
+FPL BlackBox's weekly 87-minute show, Planet FPL's podcasts. Paid tier
+only; still no-charge for YouTube input while in preview.
 
 **Status 2026-08-28 (kept for the record): evaluated on real data, not yet
 adopted. This is the most consequential open decision in the project.**

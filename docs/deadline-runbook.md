@@ -8,9 +8,12 @@ blocked the IP; 14 creators unread. Gemini is now the DEFAULT transcript
 source, so the block no longer matters. The Gemini free tier caps at 8
 hours of video per day; extraction reads ONE video per creator, and the
 GW4 selection measured on 2026-09-11 is 14 videos / 5.6 h (4.2 h uncached)
-— under the cap, so the paid tier is not needed. Skip the full warm
-(5 videos per creator, 22 h) and let extraction fetch exactly what it
-selects.
+— under the daily cap. Skip the full warm (5 videos per creator, 22 h)
+and let extraction fetch exactly what it selects. BUT the free tier also
+caps input at 250k tokens per MINUTE (~40 min of video per request), so
+FPL BlackBox's 87-minute show cannot be read without the paid tier;
+enable billing on the key or accept losing him this week. Harvest done
+2026-09-11 ~05:30 UTC: 8/9 read, BlackBox the one failure.
 
 Owner context: GW3 used Triple Captain (Haaland); wildcard planned for
 THIS deadline with the solver's £100m squad as the template; 1 FT,
