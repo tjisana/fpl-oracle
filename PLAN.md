@@ -350,6 +350,44 @@ the Sonnet implementer and reviewed fresh-context on Opus:
   entrant (`started_event != 1`). Selling arithmetic unchanged. Review made
   the regression fixture non-cancelling so a sign flip cannot pass.
 
+### Off the laptop (added 2026-09-10/11, between GW3 and GW4)
+Three decisions in one evening, each with a reason worth keeping.
+- **The price snapshot moved to AWS** (`infra/`, CDK in TypeScript). FPL
+  exposes no day-level price history, so a missed night is unrecoverable;
+  the laptop-scheduled job (launchd, installed that same day) only fires
+  with the lid open, and the owner closes it nightly. Shape: EventBridge
+  cron 07:00 UTC → dependency-free Python Lambda → private, versioned,
+  RETAIN-ed S3 bucket, writing byte-for-byte the local `PriceSnapshot`
+  shape (a test parses the handler's output with the real model so the two
+  writers cannot drift). Least privilege (read + PutObject on the prefix,
+  no delete), fetch retries, and a CloudWatch alarm → SNS email on any
+  function error, because a silent failure here is the exact thing the
+  job exists to prevent. `scripts/sync_snapshots.sh` copies only dates
+  missing locally, so a night both jobs ran keeps the local file. Files
+  first, database later: the snapshot is an immutable raw record, and the
+  DB (web-app decision, SQLite → Postgres) will be loaded from these.
+  Review fresh-context on Fable; the account's 2022 relics (a Beanstalk
+  app, three buckets, an old admin user, QuickSetup roles) were removed.
+- **Both launchd jobs were removed the day they were installed.** The
+  snapshot one became a second writer; the warm one was the scraper, and
+  an unattended 1 AM burst on deadline eve is precisely how the IP got
+  blocked. The plists stay in `docs/daily-jobs.md` for a Gemini-backed
+  reinstall if one ever earns it.
+- **Gemini became the default transcript source** (`ingest/sourcing.py`;
+  `--source captions` opts back into the scraper). Trigger: the third IP
+  block in three gameweeks, at 6 s pacing on a residential IP, on the
+  19th fetch — which falsified the 2026-08-27 reading that rate mattered
+  more than IP class. Implemented by the Sonnet implementer from a
+  written spec, reviewed fresh-context; the review caught four new tests
+  that made live YouTube calls, transport errors escaping the duration
+  lookup, and extraction discarding what Gemini had just read. Measured
+  on the first live read: 5-minute video in 28 s, 203 wpm, timings
+  discarded as `:untimed` (they overran the real length by 50%). What is
+  still open: timestamps (a laptop-side alignment pass from captions is
+  the plan) and the free tier's 8 h-of-video/day cap — which the GW4
+  selection does not reach (14 videos, 5.6 h), because extraction reads
+  one video per creator, not the five-per-creator warm.
+
 ## Later (post-GW1)
 - Weekly transfer recommender aware of my actual squad/budget/free transfers
   (in-season, score transfer advice within price bands — the "vacuum" problem
