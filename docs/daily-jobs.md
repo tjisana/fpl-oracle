@@ -156,3 +156,42 @@ having fetched nothing beyond whatever's already cached — this is
 correct behavior, not a broken schedule. `scripts/retry_blocked_transcripts.sh`
 is the separate, patient tool for confirming a block has lifted and
 backfilling what was missed; it is not meant to be scheduled.
+
+## Cloud snapshot (AWS, added 2026-09-10)
+
+The launchd jobs above only fire while the laptop is awake, and the owner
+closes it nightly. The price snapshot is the one job that cannot miss a
+night (FPL exposes no day-level price history), so it also runs in AWS:
+
+- `infra/` — CDK app (TypeScript). One stack, `FplOracle`: a private,
+  versioned S3 bucket (`RETAIN`, never deleted by the stack); a Python 3.12
+  Lambda (`infra/lambda/snapshot/handler.py`, stdlib + boto3, no packaging);
+  an EventBridge cron at **07:00 UTC** daily with two retries.
+- The Lambda writes `s3://<bucket>/snapshots/{YYYY-MM-DD}.json` in exactly
+  the shape of `data/snapshots/*.json`. `tests/test_snapshot_lambda.py`
+  parses its output with the real `PriceSnapshot` model so the two writers
+  cannot drift.
+- Idempotent per UTC date within each store, same rule as the local job.
+  The two jobs write to DIFFERENT stores (the file tree vs the bucket), so
+  on a night the laptop is open both write, holding the same prices with
+  different `taken_at` stamps. `scripts/sync_snapshots.sh` reconciles by
+  copying only dates missing locally: the local file wins when both exist,
+  and nothing is ever overwritten or deleted. Run it before any pipeline
+  work that reads snapshots.
+- A function error trips a CloudWatch alarm on an SNS topic. Deploy with
+  `FPL_ORACLE_ALERT_EMAIL=<address>` to subscribe an email (AWS sends a
+  confirmation link that must be clicked once). The EventBridge target's two
+  retries cover a failed *invocation*; the alarm covers a run that raised.
+
+Commands (from `infra/`, after `aws login`):
+
+```sh
+npm test                   # stack assertions (schedule, bucket policy)
+npx cdk diff               # what a deploy would change
+npx cdk deploy             # create/update the stack
+aws lambda invoke --function-name <SnapshotFunctionName output> /dev/stdout
+```
+
+The warm-cache job is deliberately NOT in the cloud: cloud IPs are what
+YouTube blocks (see `docs/transcript-blocking.md`). Its laptop-free path is
+Gemini ingestion, the open decision in ROADMAP.md.
