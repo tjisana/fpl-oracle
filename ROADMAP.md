@@ -18,11 +18,11 @@ chips unused.
 
 - [x] **Cache warmed for GW3** (2026-09-03): 52 transcripts, 0 blocked at
       6s pacing. Price snapshot taken. 14/18 creators have a GW3 video.
-- [x] **Daily jobs were never installed.** No launchd plists, no crontab;
-      the last warm/snapshot logs were Aug 28 and five snapshots were
-      missed. Install per `docs/daily-jobs.md` — snapshot is non-negotiable
-      (prices change nightly), warm is free and is also how we collect
-      creator posting-schedule data.
+- [x] **Daily jobs installed 2026-09-10** (launchd, per `docs/daily-jobs.md`;
+      `launchctl list | grep fpl-oracle` shows both). They were NOT installed
+      after GW3 despite the earlier tick: snapshots missed 09-04 to 09-10.
+      Snapshot is non-negotiable (prices change nightly); warm is free,
+      spends no LLM credits, and collects creator posting-schedule data.
 - [ ] **Wildcard week** — most GW3 titles are wildcard / free-hit drafts.
       Three changes in flight (2026-09-03): free-hit picks excluded from the
       transfer recommender (kept for the £100m squad); a chip-consensus
