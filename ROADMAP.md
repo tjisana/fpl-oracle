@@ -30,9 +30,10 @@ against GW3 points before trusting the GW4 report.
       windows spaced a quota period apart (`chunk_windows`), all-or-
       nothing, provenance `:untimed:chunked`. No paid tier needed.
       (A full warm at 5 videos/creator would be 22 h; don't.)
-- [ ] **Run extraction, then solve, `--gameweek 4` on both.** Wildcard
-      week: read the wildcard-gap line and chip consensus first. See
-      `docs/deadline-runbook.md` (GW4 section).
+- [x] **Run extraction, then solve, `--gameweek 4` on both.** Done
+      2026-09-12: 14/14 active creators, 94% name match. WILDCARD played
+      with the solver's squad, Palmer captain; decision recorded in
+      `data/runs/20260912T041124Z-b3fe09d/decision.md`. Grade after GW4.
 - [ ] **Reserve fallback** (decided 2026-09-12). Roster now carries a
       `CreatorStatus`: Heisenberg RETIRED (dead channel); FPL Matthew,
       Planet FPL and FPL Family RESERVE — "when there's nothing else".
