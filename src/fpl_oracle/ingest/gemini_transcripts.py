@@ -54,6 +54,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from collections.abc import Callable
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -76,6 +78,34 @@ MAX_ATTEMPTS = 3
 
 # Per-request timeout in milliseconds (the SDK's unit). See `_client`.
 REQUEST_TIMEOUT_MS = 10 * 60 * 1000
+
+# Longest video we will even ask Gemini to read, in seconds. The free tier
+# caps input at 250k tokens per MINUTE and a video costs ~100 tokens per
+# second, so anything past ~40 minutes cannot succeed there: FPL BlackBox's
+# 87-minute show 429'd on every attempt on 2026-09-11, then ReadError'd,
+# then hung a deadline-day run for 6.5 hours. Refusing up front turns that
+# into an instant, logged skip. Paid-tier keys have no such cap — raise the
+# limit with the environment variable.
+MAX_VIDEO_SECONDS_ENV_VAR = "GEMINI_MAX_VIDEO_SECONDS"
+DEFAULT_MAX_VIDEO_SECONDS = 40 * 60
+
+
+def max_video_seconds() -> float:
+    load_dotenv()
+    raw = os.environ.get(MAX_VIDEO_SECONDS_ENV_VAR)
+    if not raw:
+        return DEFAULT_MAX_VIDEO_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "gemini_transcripts: %s=%r is not a number — using the default %ds",
+            MAX_VIDEO_SECONDS_ENV_VAR,
+            raw,
+            DEFAULT_MAX_VIDEO_SECONDS,
+        )
+        return DEFAULT_MAX_VIDEO_SECONDS
+
 
 _PROMPT = (
     "Transcribe everything spoken in this video, verbatim, in order.\n"
@@ -191,6 +221,36 @@ def _to_transcript(
     )
 
 
+def _call_with_deadline[T](fn: Callable[[], T], seconds: float) -> T:
+    """Run `fn` with a WALL-CLOCK deadline, independent of the socket.
+
+    The SDK's `HttpOptions.timeout` becomes an httpx per-read timeout, and
+    on 2026-09-11 that did not fire: the server kept the connection
+    ESTABLISHED for 6.5 hours (each read returning something, so no read
+    ever timed out) while a deadline-day run sat on one video. A daemon
+    thread plus `join(timeout)` bounds the wait regardless of what the
+    connection does; on expiry the thread is abandoned (daemon, so it
+    cannot hold the interpreter open) and `TimeoutError` is raised, which
+    the retry loop treats like any other per-attempt failure."""
+    result: list[T] = []
+    error: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(fn())
+        except BaseException as e:  # noqa: BLE001 - re-raised on the caller's thread
+            error.append(e)
+
+    worker = threading.Thread(target=run, name="gemini-generate", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise TimeoutError(f"Gemini request exceeded the {seconds:.0f}s wall-clock deadline")
+    if error:
+        raise error[0]
+    return result[0]
+
+
 def fetch_transcript_via_gemini(
     video_id: str, duration_seconds: float | None = None
 ) -> Transcript | None:
@@ -198,6 +258,18 @@ def fetch_transcript_via_gemini(
     read after `MAX_ATTEMPTS` — a per-video failure, never fatal, matching
     `fetch_transcript`'s contract so the two are interchangeable."""
     from google.genai import types
+
+    limit = max_video_seconds()
+    if duration_seconds is not None and duration_seconds > limit:
+        logger.warning(
+            "gemini_transcripts: %s — %.0f min video exceeds the %.0f min limit "
+            "(%s); skipping without a request",
+            video_id,
+            duration_seconds / 60,
+            limit / 60,
+            MAX_VIDEO_SECONDS_ENV_VAR,
+        )
+        return None
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     last_error: Exception | None = None
@@ -210,18 +282,21 @@ def fetch_transcript_via_gemini(
             # a None it can record and step over, not an exception that
             # ends the run. The cause is logged either way.
             client = _client()
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=types.Content(
-                    parts=[
-                        types.Part(file_data=types.FileData(file_uri=url)),
-                        types.Part(text=_PROMPT),
-                    ]
+            response = _call_with_deadline(
+                lambda client=client: client.models.generate_content(
+                    model=MODEL,
+                    contents=types.Content(
+                        parts=[
+                            types.Part(file_data=types.FileData(file_uri=url)),
+                            types.Part(text=_PROMPT),
+                        ]
+                    ),
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=_WireTranscript,
+                    ),
                 ),
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=_WireTranscript,
-                ),
+                seconds=REQUEST_TIMEOUT_MS / 1000,
             )
             parsed = response.parsed
             if parsed is None:

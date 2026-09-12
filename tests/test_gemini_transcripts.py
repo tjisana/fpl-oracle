@@ -124,3 +124,113 @@ class TestFetchIsNeverFatal:
 
         monkeypatch.setattr(gt, "_client", boom)
         assert gt.fetch_transcript_via_gemini("v") is None
+
+
+class TestLongVideosAreRefusedUpFront:
+    """The free tier cannot read a video past ~40 minutes (250k input
+    tokens per minute at ~100 tokens/second). 2026-09-11: an 87-minute show
+    429'd, then ReadError'd, then hung a deadline-day run for 6.5 hours."""
+
+    def test_over_the_limit_returns_none_without_building_a_client(self, monkeypatch) -> None:
+        monkeypatch.delenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, raising=False)
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+
+        def boom():
+            raise AssertionError("no request should be made for an over-limit video")
+
+        monkeypatch.setattr(gt, "_client", boom)
+        assert gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60) is None
+
+    def test_at_or_under_the_limit_proceeds(self, monkeypatch) -> None:
+        monkeypatch.delenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, raising=False)
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+        calls: list[int] = []
+
+        def counting_client():
+            calls.append(1)
+            raise RuntimeError("stop here")
+
+        monkeypatch.setattr(gt, "_client", counting_client)
+        assert gt.fetch_transcript_via_gemini("v", duration_seconds=40 * 60) is None
+        assert calls, "a video at the limit must still be attempted"
+
+    def test_unknown_duration_is_not_refused(self, monkeypatch) -> None:
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+        calls: list[int] = []
+
+        def counting_client():
+            calls.append(1)
+            raise RuntimeError("stop here")
+
+        monkeypatch.setattr(gt, "_client", counting_client)
+        gt.fetch_transcript_via_gemini("v", duration_seconds=None)
+        assert calls
+
+    def test_env_var_raises_the_limit_for_paid_tier_keys(self, monkeypatch) -> None:
+        monkeypatch.setenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, str(3 * 3600))
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+        calls: list[int] = []
+
+        def counting_client():
+            calls.append(1)
+            raise RuntimeError("stop here")
+
+        monkeypatch.setattr(gt, "_client", counting_client)
+        gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60)
+        assert calls
+
+    def test_garbage_env_var_falls_back_to_the_default(self, monkeypatch) -> None:
+        monkeypatch.setenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, "lots")
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+        assert gt.max_video_seconds() == gt.DEFAULT_MAX_VIDEO_SECONDS
+
+
+class TestWallClockDeadline:
+    """The per-read socket timeout did not fire on 2026-09-11 (connection
+    kept alive for 6.5 h); the deadline must be wall-clock."""
+
+    def test_returns_the_result_when_the_call_finishes_in_time(self) -> None:
+        assert gt._call_with_deadline(lambda: 42, seconds=5) == 42
+
+    def test_raises_timeout_when_the_call_outlives_the_deadline(self) -> None:
+        import threading
+
+        release = threading.Event()
+
+        def slow() -> int:
+            release.wait(10)
+            return 1
+
+        try:
+            with pytest.raises(TimeoutError, match="wall-clock"):
+                gt._call_with_deadline(slow, seconds=0.2)
+        finally:
+            release.set()
+
+    def test_reraises_the_callables_own_error(self) -> None:
+        def boom() -> int:
+            raise ValueError("bad response")
+
+        with pytest.raises(ValueError, match="bad response"):
+            gt._call_with_deadline(boom, seconds=5)
+
+    def test_a_timed_out_attempt_is_retried_then_gives_up_cleanly(self, monkeypatch) -> None:
+        """Through the public function: a hang costs attempts, not the run."""
+        monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+        monkeypatch.setenv(gt.GEMINI_API_KEY_ENV_VAR, "test-key")
+        monkeypatch.setattr(gt, "REQUEST_TIMEOUT_MS", 100)
+        attempts: list[int] = []
+
+        class _Models:
+            def generate_content(self, **kwargs):
+                import threading
+
+                attempts.append(1)
+                threading.Event().wait(5)  # never returns in time
+
+        class _Client:
+            models = _Models()
+
+        monkeypatch.setattr(gt, "_client", lambda: _Client())
+        assert gt.fetch_transcript_via_gemini("v", duration_seconds=60) is None
+        assert len(attempts) == gt.MAX_ATTEMPTS
