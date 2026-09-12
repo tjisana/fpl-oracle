@@ -6,6 +6,8 @@ shipping plausible-looking wrong deep links into the evidence trail."""
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 
 from fpl_oracle.ingest import gemini_transcripts as gt
@@ -127,9 +129,8 @@ class TestFetchIsNeverFatal:
 
 
 class TestLongVideosAreRefusedUpFront:
-    """The free tier cannot read a video past ~40 minutes (250k input
-    tokens per minute at ~100 tokens/second). 2026-09-11: an 87-minute show
-    429'd, then ReadError'd, then hung a deadline-day run for 6.5 hours."""
+    """A sanity ceiling (3 h by default) — long videos are otherwise read
+    in windows, see TestChunkedReads. Nobody's team reveal is a stream."""
 
     def test_over_the_limit_returns_none_without_building_a_client(self, monkeypatch) -> None:
         monkeypatch.delenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, raising=False)
@@ -139,7 +140,7 @@ class TestLongVideosAreRefusedUpFront:
             raise AssertionError("no request should be made for an over-limit video")
 
         monkeypatch.setattr(gt, "_client", boom)
-        assert gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60) is None
+        assert gt.fetch_transcript_via_gemini("v", duration_seconds=4 * 3600) is None
 
     def test_at_or_under_the_limit_proceeds(self, monkeypatch) -> None:
         monkeypatch.delenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, raising=False)
@@ -151,8 +152,8 @@ class TestLongVideosAreRefusedUpFront:
             raise RuntimeError("stop here")
 
         monkeypatch.setattr(gt, "_client", counting_client)
-        assert gt.fetch_transcript_via_gemini("v", duration_seconds=40 * 60) is None
-        assert calls, "a video at the limit must still be attempted"
+        assert gt.fetch_transcript_via_gemini("v", duration_seconds=3 * 3600) is None
+        assert calls, "a video at the ceiling must still be attempted"
 
     def test_unknown_duration_is_not_refused(self, monkeypatch) -> None:
         monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
@@ -167,7 +168,7 @@ class TestLongVideosAreRefusedUpFront:
         assert calls
 
     def test_env_var_raises_the_limit_for_paid_tier_keys(self, monkeypatch) -> None:
-        monkeypatch.setenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, str(3 * 3600))
+        monkeypatch.setenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, str(5 * 3600))
         monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
         calls: list[int] = []
 
@@ -176,7 +177,7 @@ class TestLongVideosAreRefusedUpFront:
             raise RuntimeError("stop here")
 
         monkeypatch.setattr(gt, "_client", counting_client)
-        gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60)
+        gt.fetch_transcript_via_gemini("v", duration_seconds=4 * 3600, sleep=lambda s: None)
         assert calls
 
     def test_garbage_env_var_falls_back_to_the_default(self, monkeypatch) -> None:
@@ -234,3 +235,180 @@ class TestWallClockDeadline:
         monkeypatch.setattr(gt, "_client", lambda: _Client())
         assert gt.fetch_transcript_via_gemini("v", duration_seconds=60) is None
         assert len(attempts) == gt.MAX_ATTEMPTS
+
+
+def _fake_client_factory(monkeypatch, responder):
+    """Install a fake Gemini client whose generate_content(**kwargs) calls
+    `responder(kwargs)` and returns an object with `.parsed`."""
+    calls: list[dict] = []
+
+    class _Resp:
+        def __init__(self, parsed) -> None:
+            self.parsed = parsed
+
+    class _Models:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return _Resp(responder(kwargs))
+
+    class _Client:
+        models = _Models()
+
+    monkeypatch.setattr(gt, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv(gt.GEMINI_API_KEY_ENV_VAR, "test-key")
+    monkeypatch.setattr(gt, "_client", lambda: _Client())
+    return calls
+
+
+def _window_of(kwargs) -> tuple[str, str] | None:
+    part = kwargs["contents"].parts[0]
+    vm = part.video_metadata
+    return (vm.start_offset, vm.end_offset) if vm is not None else None
+
+
+def _required_window(kwargs) -> tuple[str, str]:
+    window = _window_of(kwargs)
+    assert window is not None, "expected a windowed request"
+    return window
+
+
+class TestChunkWindows:
+    def test_short_video_is_one_window(self) -> None:
+        assert gt.chunk_windows(20 * 60) == [(0.0, 1200.0)]
+
+    def test_exactly_one_chunk_is_one_window(self) -> None:
+        assert gt.chunk_windows(gt.CHUNK_SECONDS) == [(0.0, float(gt.CHUNK_SECONDS))]
+
+    def test_87_minute_show_is_three_consecutive_windows(self) -> None:
+        assert gt.chunk_windows(87 * 60) == [(0.0, 1800.0), (1800.0, 3600.0), (3600.0, 5220.0)]
+
+    def test_windows_are_gapless_and_cover_the_video(self) -> None:
+        windows = gt.chunk_windows(12345.0)
+        assert windows[0][0] == 0.0
+        assert windows[-1][1] == 12345.0
+        assert all(a[1] == b[0] for a, b in pairwise(windows))
+        assert all(end - start <= gt.CHUNK_SECONDS for start, end in windows)
+
+
+class TestChunkedReads:
+    """The free tier's cap is 250k input tokens per MINUTE (~40 min of
+    video per request). A long video is read window by window, one quota
+    period apart, and stitched in order."""
+
+    def test_short_video_is_a_single_request_without_offsets(self, monkeypatch) -> None:
+        calls = _fake_client_factory(monkeypatch, lambda kw: _wire((0, "hello"), (5, "world")))
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=20 * 60, sleep=lambda s: None)
+        assert t is not None
+        assert len(calls) == 1
+        assert _window_of(calls[0]) is None
+        assert t.source == f"gemini:{gt.MODEL}"
+
+    def test_long_video_is_read_in_windows_with_offsets_and_part_labels(self, monkeypatch) -> None:
+        def responder(kw):
+            start, _end = _required_window(kw)
+            return _wire((0, f"text from {start}"))
+
+        calls = _fake_client_factory(monkeypatch, responder)
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60, sleep=lambda s: None)
+
+        assert t is not None
+        assert [_window_of(c) for c in calls] == [
+            ("0s", "1800s"),
+            ("1800s", "3600s"),
+            ("3600s", "5220s"),
+        ]
+        prompts = [c["contents"].parts[1].text for c in calls]
+        assert "part 1 of 3" in prompts[0] and "part 3 of 3" in prompts[2]
+        assert "minutes 30 to 60" in prompts[1]
+
+    def test_windows_are_stitched_in_order_and_marked_untimed_chunked(self, monkeypatch) -> None:
+        def responder(kw):
+            start, _end = _required_window(kw)
+            # Gemini's per-window timings are meaningless; make them
+            # DEscending across windows to prove we never re-sort on them.
+            return _wire((9000 - float(start[:-1]), f"w{start}"))
+
+        _fake_client_factory(monkeypatch, responder)
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60, sleep=lambda s: None)
+        assert t is not None
+        assert [seg.text for seg in t.segments] == ["w0s", "w1800s", "w3600s"]
+        assert t.source == f"gemini:{gt.MODEL}:untimed:chunked"
+        assert all(seg.start == 0.0 and seg.duration == 0.0 for seg in t.segments)
+        assert t.full_text == "w0s w1800s w3600s"
+
+    def test_requests_are_spaced_one_quota_period_apart(self, monkeypatch) -> None:
+        """Three windows, each request 'taking' 10 s: the second and third
+        must wait the remaining 50 s so that request STARTS are 60 s apart."""
+        now = [0.0]
+        slept: list[float] = []
+
+        def clock() -> float:
+            return now[0]
+
+        def sleep(seconds: float) -> None:
+            slept.append(seconds)
+            now[0] += seconds
+
+        def responder(kw):
+            now[0] += 10.0  # the request itself takes 10 s
+            return _wire((0, "x"))
+
+        _fake_client_factory(monkeypatch, responder)
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60, sleep=sleep, clock=clock)
+        assert t is not None
+        assert slept == [gt.CHUNK_SPACING_SECONDS - 10.0, gt.CHUNK_SPACING_SECONDS - 10.0]
+
+    def test_no_wait_when_a_request_already_took_a_full_quota_period(self, monkeypatch) -> None:
+        now = [0.0]
+        slept: list[float] = []
+
+        def responder(kw):
+            now[0] += 90.0
+            return _wire((0, "x"))
+
+        _fake_client_factory(monkeypatch, responder)
+        gt.fetch_transcript_via_gemini(
+            "v", duration_seconds=61 * 60, sleep=slept.append, clock=lambda: now[0]
+        )
+        assert slept == []
+
+    def test_a_window_that_keeps_failing_loses_the_whole_video(self, monkeypatch) -> None:
+        """All-or-nothing: a hole in the middle could be the team reveal."""
+        attempts: list[str] = []
+
+        def responder(kw):
+            start, _ = _required_window(kw)
+            attempts.append(start)
+            if start == "1800s":
+                raise RuntimeError("503 high demand")
+            return _wire((0, "ok"))
+
+        _fake_client_factory(monkeypatch, responder)
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60, sleep=lambda s: None)
+        assert t is None
+        assert attempts.count("1800s") == gt.MAX_ATTEMPTS
+        assert "3600s" not in attempts, "must stop at the failed window, not read on"
+
+    def test_a_transient_window_failure_is_retried_and_the_video_survives(
+        self, monkeypatch
+    ) -> None:
+        seen: list[str] = []
+
+        def responder(kw):
+            start, _ = _required_window(kw)
+            seen.append(start)
+            if start == "1800s" and seen.count("1800s") == 1:
+                raise RuntimeError("503 once")
+            return _wire((0, f"w{start}"))
+
+        _fake_client_factory(monkeypatch, responder)
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=87 * 60, sleep=lambda s: None)
+        assert t is not None
+        assert [seg.text for seg in t.segments] == ["w0s", "w1800s", "w3600s"]
+
+    def test_unknown_duration_is_a_single_unwindowed_request(self, monkeypatch) -> None:
+        calls = _fake_client_factory(monkeypatch, lambda kw: _wire((0, "x")))
+        t = gt.fetch_transcript_via_gemini("v", duration_seconds=None, sleep=lambda s: None)
+        assert t is not None
+        assert len(calls) == 1 and _window_of(calls[0]) is None
+        assert t.source.endswith(":untimed")

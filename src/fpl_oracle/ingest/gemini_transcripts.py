@@ -55,6 +55,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable
 
 from dotenv import load_dotenv
@@ -79,15 +80,23 @@ MAX_ATTEMPTS = 3
 # Per-request timeout in milliseconds (the SDK's unit). See `_client`.
 REQUEST_TIMEOUT_MS = 10 * 60 * 1000
 
-# Longest video we will even ask Gemini to read, in seconds. The free tier
-# caps input at 250k tokens per MINUTE and a video costs ~100 tokens per
-# second, so anything past ~40 minutes cannot succeed there: FPL BlackBox's
-# 87-minute show 429'd on every attempt on 2026-09-11, then ReadError'd,
-# then hung a deadline-day run for 6.5 hours. Refusing up front turns that
-# into an instant, logged skip. Paid-tier keys have no such cap — raise the
-# limit with the environment variable.
+# The free tier caps input at 250k tokens per MINUTE and a video costs
+# ~100 tokens per second, so a single request cannot cover more than ~40
+# minutes of video: FPL BlackBox's 87-minute show 429'd on every attempt
+# on 2026-09-11, then ReadError'd, then hung a deadline-day run for 6.5
+# hours. The answer is to read long videos in WINDOWS — the API takes a
+# start/end offset per request — and to space the requests a quota window
+# apart, since the cap is per minute, not per video. 30-minute windows
+# (~180k tokens) leave margin under the cap; 60 s between request STARTS
+# is the quota period itself.
+CHUNK_SECONDS = 30 * 60
+CHUNK_SPACING_SECONDS = 60.0
+
+# Sanity ceiling, not a quota: nobody's team reveal is a three-hour stream,
+# and a 3 h video is six chunks / six minutes of wall clock. Raise it with
+# the environment variable if a creator's format ever warrants it.
 MAX_VIDEO_SECONDS_ENV_VAR = "GEMINI_MAX_VIDEO_SECONDS"
-DEFAULT_MAX_VIDEO_SECONDS = 40 * 60
+DEFAULT_MAX_VIDEO_SECONDS = 3 * 3600
 
 
 def max_video_seconds() -> float:
@@ -162,7 +171,11 @@ _TIMING_TOLERANCE_SECONDS = 5.0
 
 
 def _to_transcript(
-    video_id: str, wire: _WireTranscript, duration_seconds: float | None = None
+    video_id: str,
+    wire: _WireTranscript,
+    duration_seconds: float | None = None,
+    *,
+    chunked: bool = False,
 ) -> Transcript:
     """Convert wire segments to our `Transcript`, deriving each segment's
     duration from the NEXT segment's start.
@@ -173,11 +186,17 @@ def _to_transcript(
     duration would put wrong offsets on the deep links the segments exist
     to power. The final segment gets a nominal duration since nothing
     follows it."""
-    ordered = sorted(wire.segments, key=lambda s: s.start_seconds)
+    # A chunked read arrives in window order and its timings are per-window
+    # (relative to each clip, or absolute, or invented — Gemini does not say
+    # which), so they are never trusted and the segments are NOT re-sorted:
+    # sorting by an unreliable start would interleave the windows.
+    ordered = wire.segments if chunked else sorted(wire.segments, key=lambda s: s.start_seconds)
 
     # Validate the timeline before trusting any of it.
     timings_ok = True
-    if duration_seconds is not None and ordered:
+    if chunked:
+        timings_ok = False
+    elif duration_seconds is not None and ordered:
         span = ordered[-1].start_seconds
         if span > duration_seconds + _TIMING_TOLERANCE_SECONDS:
             logger.warning(
@@ -217,7 +236,13 @@ def _to_transcript(
         language=wire.language or "en",
         is_generated=True,
         segments=segments,
-        source=f"gemini:{MODEL}" if timings_ok else f"gemini:{MODEL}:untimed",
+        source=(
+            f"gemini:{MODEL}:untimed:chunked"
+            if chunked
+            else f"gemini:{MODEL}"
+            if timings_ok
+            else f"gemini:{MODEL}:untimed"
+        ),
     )
 
 
@@ -251,46 +276,62 @@ def _call_with_deadline[T](fn: Callable[[], T], seconds: float) -> T:
     return result[0]
 
 
-def fetch_transcript_via_gemini(
-    video_id: str, duration_seconds: float | None = None
-) -> Transcript | None:
-    """Read `video_id`'s speech via Gemini. Returns None if it can't be
-    read after `MAX_ATTEMPTS` — a per-video failure, never fatal, matching
-    `fetch_transcript`'s contract so the two are interchangeable."""
+def chunk_windows(
+    duration_seconds: float, chunk_seconds: float = CHUNK_SECONDS
+) -> list[tuple[float, float]]:
+    """Consecutive (start, end) windows covering the video. One window when
+    it fits; otherwise `chunk_seconds`-long windows with a short tail."""
+    if duration_seconds <= chunk_seconds:
+        return [(0.0, float(duration_seconds))]
+    windows: list[tuple[float, float]] = []
+    start = 0.0
+    while start < duration_seconds:
+        end = min(start + chunk_seconds, float(duration_seconds))
+        windows.append((start, end))
+        start = end
+    return windows
+
+
+def _read_window(
+    video_id: str,
+    window: tuple[float, float] | None,
+    part: tuple[int, int] | None,
+) -> _WireTranscript:
+    """One request with retries. `window=None` reads the whole video (the
+    short-video path, unchanged); otherwise only [start, end) via the
+    API's video offsets, with the prompt told which part it is reading.
+    Raises the last error after `MAX_ATTEMPTS`."""
     from google.genai import types
 
-    limit = max_video_seconds()
-    if duration_seconds is not None and duration_seconds > limit:
-        logger.warning(
-            "gemini_transcripts: %s — %.0f min video exceeds the %.0f min limit "
-            "(%s); skipping without a request",
-            video_id,
-            duration_seconds / 60,
-            limit / 60,
-            MAX_VIDEO_SECONDS_ENV_VAR,
-        )
-        return None
-
     url = f"https://www.youtube.com/watch?v={video_id}"
+    prompt = _PROMPT
+    video_part = types.Part(file_data=types.FileData(file_uri=url))
+    if window is not None and part is not None:
+        start, end = window
+        video_part = types.Part(
+            file_data=types.FileData(file_uri=url),
+            video_metadata=types.VideoMetadata(
+                start_offset=f"{int(start)}s", end_offset=f"{int(end)}s"
+            ),
+        )
+        prompt = (
+            f"{_PROMPT}\n"
+            f"This request covers ONLY minutes {start / 60:.0f} to {end / 60:.0f} of a longer "
+            f"video (part {part[0]} of {part[1]}). Transcribe everything spoken in that "
+            f"window and nothing outside it."
+        )
     last_error: Exception | None = None
-
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             # Client construction is INSIDE the loop deliberately. It can
-            # fail for configuration reasons (no API key), and this
-            # function promises never to raise — a caller mid-run must get
-            # a None it can record and step over, not an exception that
-            # ends the run. The cause is logged either way.
+            # fail for configuration reasons (no API key), and the caller
+            # promises never to raise — a caller mid-run must get a None it
+            # can record and step over. The cause is logged either way.
             client = _client()
             response = _call_with_deadline(
                 lambda client=client: client.models.generate_content(
                     model=MODEL,
-                    contents=types.Content(
-                        parts=[
-                            types.Part(file_data=types.FileData(file_uri=url)),
-                            types.Part(text=_PROMPT),
-                        ]
-                    ),
+                    contents=types.Content(parts=[video_part, types.Part(text=prompt)]),
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=_WireTranscript,
@@ -306,26 +347,104 @@ def fetch_transcript_via_gemini(
                 if isinstance(parsed, _WireTranscript)
                 else _WireTranscript.model_validate(parsed)
             )
-            transcript = _to_transcript(video_id, wire, duration_seconds)
-            if not transcript.segments:
+            if not any(seg.text.strip() for seg in wire.segments):
                 raise ValueError("Gemini returned zero usable segments")
-            logger.info(
-                "gemini_transcripts: %s — %d segments, %d words (%s)",
-                video_id,
-                len(transcript.segments),
-                len(transcript.full_text.split()),
-                MODEL,
-            )
-            return transcript
-        except Exception as e:  # noqa: BLE001 - per-video failure, never fatal
+            return wire
+        except Exception as e:  # noqa: BLE001 - per-attempt failure; caller decides
             last_error = e
             logger.warning(
-                "gemini_transcripts: %s — attempt %d/%d failed: %s",
+                "gemini_transcripts: %s%s — attempt %d/%d failed: %s",
                 video_id,
+                f" part {part[0]}/{part[1]}" if part else "",
                 attempt,
                 MAX_ATTEMPTS,
                 type(e).__name__,
             )
+    assert last_error is not None
+    raise last_error
 
-    logger.error("gemini_transcripts: %s — giving up: %s", video_id, last_error)
-    return None
+
+def fetch_transcript_via_gemini(
+    video_id: str,
+    duration_seconds: float | None = None,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Transcript | None:
+    """Read `video_id`'s speech via Gemini. Returns None if it can't be
+    read after `MAX_ATTEMPTS` (per request) — a per-video failure, never
+    fatal, matching `fetch_transcript`'s contract so the two are
+    interchangeable.
+
+    Videos longer than `CHUNK_SECONDS` are read in consecutive windows
+    (see the constants above for why), one request per window, with
+    request starts spaced `CHUNK_SPACING_SECONDS` apart so the free tier's
+    per-minute cap is never exceeded. A chunked read is all-or-nothing: a
+    window that fails after its retries loses the video, because a
+    transcript with a silent hole in the middle could be missing the very
+    team reveal the video exists for. Chunked transcripts are always
+    `:untimed:chunked` — window timings cannot be trusted or stitched.
+    An unknown duration is read as a single request, as before."""
+    limit = max_video_seconds()
+    if duration_seconds is not None and duration_seconds > limit:
+        logger.warning(
+            "gemini_transcripts: %s — %.0f min video exceeds the %.0f min ceiling "
+            "(%s); skipping without a request",
+            video_id,
+            duration_seconds / 60,
+            limit / 60,
+            MAX_VIDEO_SECONDS_ENV_VAR,
+        )
+        return None
+
+    windows = chunk_windows(duration_seconds) if duration_seconds is not None else None
+    chunked = windows is not None and len(windows) > 1
+    try:
+        if not chunked:
+            wire = _read_window(video_id, None, None)
+            transcript = _to_transcript(video_id, wire, duration_seconds)
+        else:
+            assert windows is not None
+            merged: list[_WireSegment] = []
+            language = "en"
+            previous_start: float | None = None
+            for i, window in enumerate(windows, start=1):
+                if previous_start is not None:
+                    wait = CHUNK_SPACING_SECONDS - (clock() - previous_start)
+                    if wait > 0:
+                        sleep(wait)
+                previous_start = clock()
+                wire = _read_window(video_id, window, (i, len(windows)))
+                language = wire.language or language
+                merged.extend(wire.segments)
+                logger.info(
+                    "gemini_transcripts: %s — part %d/%d (%.0f-%.0f min): %d segments",
+                    video_id,
+                    i,
+                    len(windows),
+                    window[0] / 60,
+                    window[1] / 60,
+                    len(wire.segments),
+                )
+            transcript = _to_transcript(
+                video_id,
+                _WireTranscript(language=language, segments=merged),
+                duration_seconds,
+                chunked=True,
+            )
+    except Exception as e:  # noqa: BLE001 - per-video failure, never fatal
+        logger.error("gemini_transcripts: %s — giving up: %s", video_id, e)
+        return None
+
+    if not transcript.segments:
+        logger.error("gemini_transcripts: %s — giving up: no usable segments", video_id)
+        return None
+    logger.info(
+        "gemini_transcripts: %s — %d segments, %d words (%s%s)",
+        video_id,
+        len(transcript.segments),
+        len(transcript.full_text.split()),
+        MODEL,
+        f", {len(windows)} windows" if chunked and windows else "",
+    )
+    return transcript

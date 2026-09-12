@@ -21,13 +21,14 @@ against GW3 points before trusting the GW4 report.
       down. Laptop launchd jobs removed. See `docs/daily-jobs.md`.
 - [x] **Gemini made the default transcript source** (2026-09-10) after the
       third IP block in three gameweeks. See the ADOPTED section below.
-- [x] **Read the GW4 videos via Gemini** (2026-09-11): 8 of 9 uncached
-      selections read in 18 min; 3 of the 8 came back with timings that
-      passed validation (the rest `:untimed`). The 9th, FPL BlackBox's
-      87-minute show, is UNREADABLE on the free tier: the per-MINUTE input
-      cap is 250k tokens and a video costs ~100 tokens/second, so anything
-      over ~40 min 429s on every attempt regardless of the daily cap. The
-      paid tier lifts it (YouTube input is still no-charge in preview).
+- [x] **Read the GW4 videos via Gemini** (2026-09-11): 13/14 active
+      creators; 3 of 8 Gemini reads came back with timings that passed
+      validation (the rest `:untimed`). FPL BlackBox's 87-minute show was
+      the miss: the free tier's per-MINUTE input cap is 250k tokens and a
+      video costs ~100 tokens/second, so one request cannot cover more
+      than ~40 min. FIXED 2026-09-12 by reading long videos in 30-minute
+      windows spaced a quota period apart (`chunk_windows`), all-or-
+      nothing, provenance `:untimed:chunked`. No paid tier needed.
       (A full warm at 5 videos/creator would be 22 h; don't.)
 - [ ] **Run extraction, then solve, `--gameweek 4` on both.** Wildcard
       week: read the wildcard-gap line and chip consensus first. See
@@ -38,8 +39,8 @@ against GW3 points before trusting the GW4 report.
       Today RESERVE simply means not harvested. The follow-up: when fewer
       than N active creators contribute to a gameweek (N to decide; the
       scorecard says 13/14 is normal), run extraction over the reserves
-      too. Planet FPL also needs a per-creator title hint ("The Weekender")
-      and the paid Gemini tier (60-min show); Matthew needs a relaxed
+      too. Planet FPL also needs a per-creator title hint ("The Weekender";
+      its 60-min length is now readable via windows); Matthew needs a relaxed
       attribution rule for the FFH channel, which risks crediting strangers.
 - [ ] **Timing enrichment** — Gemini transcripts are `:untimed`; add a
       laptop-side pass that aligns a scraped caption track (when one can be
@@ -94,9 +95,11 @@ planned fix), and the free tier's 8-hours-of-video-per-day cap (paid tier
 lifts it; the YouTube-URL feature itself is still no-charge in preview).
 The GW4 run doubles as the widened comparison the last bullet asked for.
 Found on the first full run (2026-09-11): the free tier's per-minute
-input cap (250k tokens) makes any video over ~40 minutes unreadable —
-FPL BlackBox's weekly 87-minute show, Planet FPL's podcasts. Paid tier
-only; still no-charge for YouTube input while in preview.
+input cap (250k tokens) means one request cannot cover more than ~40
+minutes of video. Solved 2026-09-12 with windowed reads (30-min offsets,
+60 s apart), so BlackBox's 87-minute show and Planet FPL's hour-long one
+read on the free tier; the paid tier is no longer a prerequisite for any
+creator.
 
 **Status 2026-08-28 (kept for the record): evaluated on real data, not yet
 adopted. This is the most consequential open decision in the project.**
