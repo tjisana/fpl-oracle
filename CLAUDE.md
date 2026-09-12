@@ -47,31 +47,37 @@ code in `fpl/`, `extract/`, `consensus/`, or `solver/`.
 
 ## Working style
 
-- Before treating a task as done, review the diff in a fresh subagent context
-  against PLAN.md: every requirement implemented, edge cases tested,
-  nothing out of scope changed.
+- Before treating a task as done, review the diff in a fresh Opus subagent
+  (see Model routing) against PLAN.md: every requirement implemented, edge
+  cases tested, nothing out of scope changed. Then apply the ship rule.
 - Prefer research subagents for exploring APIs/transcripts.
 - Commit per logical change with conventional-commit messages (`feat:`, `fix:`, `chore:`).
 
 ## Model routing
 
-Three tiers (main sessions are expected to run on Opus):
+Three tiers (set by the owner 2026-09-12; main sessions run on Fable 5.1):
 
-- **Opus (main session)** — owns planning, day-to-day design decisions, prompt
-  design, code review, and integration. The default brain.
-- **Sonnet (`implementer` subagent)** — well-specified implementation tasks:
-  new module from a detailed spec, test fixes, mechanical refactors,
-  boilerplate. EXCEPTION — tricky modules stay on the main model: `solver/`,
-  `consensus/`, and `extract/` are implemented in the main session, not
-  delegated. Only hand the implementer a change there if the exact logic is
-  already decided and written out in the task.
-- **Fable (`architect` subagent)** — escalation for the hardest decisions only:
-  cross-module design questions, solver formulation trade-offs, scoring
-  philosophy, calls where the main session is genuinely torn between defensible
-  options. The architect has no conversation context, so the brief must be
-  self-contained (the question, the options considered, constraints, relevant
-  file paths). It advises; the main session decides and implements. Don't
-  route routine questions here.
+- **Fable 5.1 (main session)** — the brain: planning, design decisions,
+  prompt design, integration, and the tricky modules (`solver/`,
+  `consensus/`, `extract/` are implemented here, not delegated). The
+  `architect` subagent is the same model with a clean context, for a
+  second opinion on a hard call; brief it self-contained.
+- **Sonnet (`implementer` subagent)** — the worker: well-specified
+  implementation from a written spec, test fixes, mechanical refactors,
+  boilerplate. Only hand it a change in the tricky modules if the exact
+  logic is already decided and written out in the task.
+- **Opus (reviewer)** — every diff is reviewed in a fresh-context subagent
+  run on Opus (`Agent` with `model: "opus"`), against PLAN.md and the
+  task: requirements met, edge cases tested, nothing out of scope. It
+  reports findings; the main session decides and fixes.
+
+### Ship rule
+
+When the Opus review comes back clean (or its findings are fixed and
+re-reviewed) AND the fast test suite, ruff, and ty all pass, commit and
+**push immediately** — no confirmation needed. Pushing is part of "done".
+Anything outward-facing beyond a push (opening a PR, deploying to AWS,
+deleting cloud resources) still gets confirmed first.
 
 ### Clarification loop (implementer ↔ main session)
 
