@@ -69,7 +69,12 @@ Three tiers (set by the owner 2026-09-12; main sessions run on Fable 5.1):
 - **Opus (reviewer)** — every diff is reviewed in a fresh-context subagent
   run on Opus (`Agent` with `model: "opus"`), against PLAN.md and the
   task: requirements met, edge cases tested, nothing out of scope. It
-  reports findings; the main session decides and fixes.
+  reports findings; the main session decides and fixes. A second model
+  is deliberate: it does not share the author's blind spots, and it costs
+  half of Fable. EXCEPTION — a diff touching `solver/`, `consensus/`, or
+  `extract/` is reviewed on Fable (`model: "fable"`, still fresh
+  context): a subtle logic error there costs a gameweek, which is worth
+  the price.
 
 ### Ship rule
 
