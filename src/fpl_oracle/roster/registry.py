@@ -91,7 +91,14 @@ to never trust a numeric FPL ID from search/fetch summarization without
 that live check, even when it's presented with citations.
 """
 
-from fpl_oracle.roster.models import ClaimedFinish, Creator, PastFinish, Tier, Verification
+from fpl_oracle.roster.models import (
+    ClaimedFinish,
+    Creator,
+    CreatorStatus,
+    PastFinish,
+    Tier,
+    Verification,
+)
 from fpl_oracle.roster.weights import weight_for
 
 _BBC_FPL_EXPERTS = "https://feeds.bbci.co.uk/sport/articles/c4gj7pl3p82o"
@@ -660,6 +667,8 @@ REGISTRY: list[Creator] = [
         name="FPL Heisenberg",
         youtube_hint="FPL Heisenberg",
         tier=Tier.CORE,
+        # Retired 2026-09-12: channel's last upload is a Dec-2025 freestyle Short; 0/4 gameweeks contributed.
+        status=CreatorStatus.RETIRED,
         channel_id="UCpEUTF5nW1uF7dfXiE387dA",
         channel_title="FPL Heisenberg",
         subscriber_count=227,
@@ -682,6 +691,8 @@ REGISTRY: list[Creator] = [
         name="FPL Family",
         youtube_hint="FPL Family",
         tier=Tier.CORE,
+        # Reserve 2026-09-12: previews post late or not at all; the latest video is usually the previous gameweek's review; 1/4 gameweeks.
+        status=CreatorStatus.RESERVE,
         channel_id="UCDG_EqOaaO1SSxEMZwfrSkg",
         channel_title="FPL Family",
         subscriber_count=28_800,
@@ -738,6 +749,8 @@ REGISTRY: list[Creator] = [
         name="FPL Matthew",
         youtube_hint="FPL Matthew",
         tier=Tier.CORE,
+        # Reserve 2026-09-12: on the shared FFH channel his videos carry no name, and the attribution rule (below) refuses to guess; 0/4 gameweeks.
+        status=CreatorStatus.RESERVE,
         channel_id=_FFH_CHANNEL_ID,
         channel_title="Fantasy Football Hub (shared — see notes)",
         subscriber_count=109_000,
@@ -800,6 +813,8 @@ REGISTRY: list[Creator] = [
         name="Planet FPL (Suj & James)",
         youtube_hint="Planet FPL",
         tier=Tier.CORE,
+        # Reserve 2026-09-12: main show is titled 'The Weekender ep. N' (no gameweek cue) and runs ~60 min, over the Gemini free-tier limit; 0/4 gameweeks.
+        status=CreatorStatus.RESERVE,
         channel_id="UC8043oOKTB4uP8Nq15Kz6bg",
         channel_title="Planet FPL",
         subscriber_count=23_300,

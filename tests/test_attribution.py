@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fpl_oracle.ingest.run_ingest import eligible_creators, videos_for_creator
+from fpl_oracle.ingest.run_ingest import eligible_creators, reserve_creators, videos_for_creator
 from fpl_oracle.ingest.youtube_client import VideoInfo
-from fpl_oracle.roster.models import Creator, Tier
+from fpl_oracle.roster.models import Creator, CreatorStatus, Tier
 from fpl_oracle.roster.registry import REGISTRY
 
 _CHANNEL_ID = "UCshared"
@@ -165,3 +165,43 @@ class TestRegistryAttributionInvariants:
     def test_no_channel_has_two_channel_primary_creators(self) -> None:
         primary_channel_ids = [c.channel_id for c in REGISTRY if c.channel_primary]
         assert len(primary_channel_ids) == len(set(primary_channel_ids))
+
+
+class TestCreatorStatus:
+    """Owner decision 2026-09-12: a RETIRED creator is never harvested; a
+    RESERVE one is held back for a "when there's nothing else" pass."""
+
+    def test_default_status_is_active_and_eligible(self) -> None:
+        solo = _creator("solo")
+        assert solo.status == CreatorStatus.ACTIVE
+        assert eligible_creators([solo]) == [solo]
+
+    def test_retired_creator_is_not_eligible(self) -> None:
+        gone = _creator("gone", status=CreatorStatus.RETIRED)
+        assert eligible_creators([gone]) == []
+        assert reserve_creators([gone]) == []
+
+    def test_reserve_creator_is_held_back_not_eligible(self) -> None:
+        bench = _creator("bench", status=CreatorStatus.RESERVE)
+        assert eligible_creators([bench]) == []
+        assert reserve_creators([bench]) == [bench]
+
+    def test_retiring_a_co_host_does_not_make_the_shared_channel_sole_owned(self) -> None:
+        """Both still count toward the channel's host count, so the
+        remaining plain co-host stays excluded by the shared-channel rule."""
+        primary = _creator("primary", channel_primary=True)
+        retired = _creator("retired", status=CreatorStatus.RETIRED)
+        plain = _creator("plain")
+        assert eligible_creators([primary, retired, plain]) == [primary]
+
+    def test_registry_after_gw4(self) -> None:
+        by_id = {c.creator_id: c for c in REGISTRY}
+        assert by_id["fpl-heisenberg"].status == CreatorStatus.RETIRED
+        for cid in ("fpl-matthew", "planet-fpl", "fpl-family"):
+            assert by_id[cid].status == CreatorStatus.RESERVE, cid
+        assert len(eligible_creators(REGISTRY)) == 14
+        assert {c.creator_id for c in reserve_creators(REGISTRY)} == {
+            "fpl-matthew",
+            "planet-fpl",
+            "fpl-family",
+        }

@@ -31,7 +31,7 @@ from fpl_oracle.ingest.youtube_client import (
     get_video_durations,
     list_recent_videos,
 )
-from fpl_oracle.roster.models import Creator
+from fpl_oracle.roster.models import Creator, CreatorStatus
 from fpl_oracle.roster.registry import REGISTRY
 
 TARGET_TRANSCRIPT_COUNT = 3
@@ -62,15 +62,37 @@ def eligible_creators(registry: list[Creator]) -> list[Creator]:
     co-host on a shared channel with neither (e.g. Zophar, Lateriser on The
     FPL Wire) is excluded — their content flows in via the channel's
     primary instead. Ordered Tier.CORE first, then registry order (stable
-    sort preserves ties within a tier)."""
+    sort preserves ties within a tier).
+
+    Only `CreatorStatus.ACTIVE` creators are eligible: RETIRED ones are
+    gone for good and RESERVE ones wait for the fallback pass (see
+    `reserve_creators`). A shared channel's co-host count still includes
+    inactive members, so a channel does not silently become "sole-owned"
+    because its other host was retired."""
     with_channel = [c for c in registry if c.channel_id is not None]
     channel_counts = Counter(c.channel_id for c in with_channel)
     eligible = [
         c
         for c in with_channel
-        if channel_counts[c.channel_id] == 1 or c.title_filter is not None or c.channel_primary
+        if c.status == CreatorStatus.ACTIVE
+        and (channel_counts[c.channel_id] == 1 or c.title_filter is not None or c.channel_primary)
     ]
     return sorted(eligible, key=lambda c: c.tier)
+
+
+def reserve_creators(registry: list[Creator]) -> list[Creator]:
+    """Creators held back for the "when there's nothing else" pass: same
+    channel rules as `eligible_creators`, but `CreatorStatus.RESERVE`.
+    Nothing calls this on a normal run yet — the fallback (extract these
+    only when the active group under-delivers) is the ROADMAP follow-up."""
+    with_channel = [c for c in registry if c.channel_id is not None]
+    channel_counts = Counter(c.channel_id for c in with_channel)
+    return [
+        c
+        for c in with_channel
+        if c.status == CreatorStatus.RESERVE
+        and (channel_counts[c.channel_id] == 1 or c.title_filter is not None or c.channel_primary)
+    ]
 
 
 def videos_for_creator(

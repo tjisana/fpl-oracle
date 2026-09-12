@@ -32,6 +32,15 @@ against GW3 points before trusting the GW4 report.
 - [ ] **Run extraction, then solve, `--gameweek 4` on both.** Wildcard
       week: read the wildcard-gap line and chip consensus first. See
       `docs/deadline-runbook.md` (GW4 section).
+- [ ] **Reserve fallback** (decided 2026-09-12). Roster now carries a
+      `CreatorStatus`: Heisenberg RETIRED (dead channel); FPL Matthew,
+      Planet FPL and FPL Family RESERVE — "when there's nothing else".
+      Today RESERVE simply means not harvested. The follow-up: when fewer
+      than N active creators contribute to a gameweek (N to decide; the
+      scorecard says 13/14 is normal), run extraction over the reserves
+      too. Planet FPL also needs a per-creator title hint ("The Weekender")
+      and the paid Gemini tier (60-min show); Matthew needs a relaxed
+      attribution rule for the FFH channel, which risks crediting strangers.
 - [ ] **Timing enrichment** — Gemini transcripts are `:untimed`; add a
       laptop-side pass that aligns a scraped caption track (when one can be
       fetched without a block) onto the Gemini text so deep links come back.
@@ -257,6 +266,10 @@ is it worth -4?" Different objective, much smaller search space.
       videos don't, and the shared FFH channel hosts non-registry people, so
       attributing unclaimed videos to him would risk a stranger's picks carrying
       his weight. One lost creator is the cheaper error. See `roster/registry.py`.
-- [ ] 4 eligible creators contributed nothing to the GW1 run (FPL Heisenberg,
-      FPL Matthew, Planet FPL, Pras). Pras matters most — he's The FPL Wire's
-      channel primary, so his absence silently costs Zophar and Lateriser too.
+- [x] ~~4 eligible creators contributed nothing to the GW1 run (FPL Heisenberg,
+      FPL Matthew, Planet FPL, Pras).~~ Pras has contributed GW2-GW4. The
+      other three never did in four gameweeks: Heisenberg retired, Matthew
+      and Planet FPL moved to RESERVE on 2026-09-12 (see NOW). Scorecard
+      after GW4: 11 creators 4/4, Pras and Hints 3/4, BlackBox 2/4 (length
+      limit), Family 1/4 (now RESERVE). ~72% of roster weight shows up
+      reliably; the weights were computed as if all 18 would.

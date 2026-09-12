@@ -388,6 +388,19 @@ Three decisions in one evening, each with a reason worth keeping.
   selection does not reach (14 videos, 5.6 h), because extraction reads
   one video per creator, not the five-per-creator warm.
 
+### Roster status (added 2026-09-12, GW4 deadline eve)
+Four gameweeks of extractions gave the first real contribution scorecard:
+11 of 18 eligible creators delivered every week, Pras and Hints 3/4,
+BlackBox 2/4 (an 87-minute show the Gemini free tier cannot read),
+FPL Family 1/4, and Heisenberg, Matthew and Planet FPL never — roughly
+28% of the roster's weight had never voted. Owner's call: Heisenberg is
+RETIRED (channel dead since a Dec-2025 freestyle Short); the other three
+are RESERVE, "when there's nothing else". `Creator.status` carries this;
+`eligible_creators` harvests only ACTIVE, `reserve_creators` names the
+rest for a fallback pass that is still to be built (ROADMAP). Chosen over
+deleting entries so past extractions keep attributing and the FPL
+histories stay on record. 14 active creators from GW5.
+
 ## Later (post-GW1)
 - Weekly transfer recommender aware of my actual squad/budget/free transfers
   (in-season, score transfer advice within price bands — the "vacuum" problem

@@ -7,6 +7,26 @@ from enum import IntEnum, StrEnum
 from pydantic import BaseModel
 
 
+class CreatorStatus(StrEnum):
+    """Whether a creator is harvested at all, and when.
+
+    ACTIVE   — harvested every gameweek. The default.
+    RESERVE  — "when there's nothing else" (owner, 2026-09-12): NOT
+               harvested on a normal run; consulted only when the active
+               group under-delivers. The fallback itself is a follow-up
+               (see ROADMAP); until it lands, RESERVE behaves like RETIRED
+               for harvesting while keeping the creator's weight and
+               history intact so the fallback can use them.
+    RETIRED  — never harvested (dead or repurposed channel). Kept in the
+               registry so past extractions still attribute and the FPL
+               history stays on record.
+    """
+
+    ACTIVE = "active"
+    RESERVE = "reserve"
+    RETIRED = "retired"
+
+
 class Tier(IntEnum):
     """Creator weighting tier. Tier 2 is the default fallback for creators
     whose skill can't be substantiated by any verification tier — they
@@ -81,6 +101,7 @@ class Creator(BaseModel):
     name: str
     youtube_hint: str
     tier: Tier
+    status: CreatorStatus = CreatorStatus.ACTIVE
 
     channel_id: str | None = None
     channel_title: str | None = None
