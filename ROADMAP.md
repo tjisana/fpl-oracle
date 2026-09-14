@@ -177,33 +177,69 @@ is it worth -4?" Different objective, much smaller search space.
 - [ ] **Creator scoreboard** — 19/20 creators have verified FPL entry ids. Track
       their live ranks + whether their picks paid off. Makes the weights honest.
 
-## THEN — deployment + web app
+## THEN — web app, release one (target: a working URL by early Oct 2026)
 
-- [ ] **Durable storage FIRST.** `data/` is gitignored and ephemeral on Lambda/Fargate.
-      If the transcript cache doesn't survive between runs, every run re-fetches the
-      whole season and gets IP-blocked. This is a precondition, not an optimization.
-- [ ] **Split the pipeline at the cache boundary** (recommended, £0): fetch transcripts
-      on a local machine → sync to S3; run extract → solve → report in the cloud.
-      "residential IP, never blocked" was the original reasoning here — TESTED and
-      FALSIFIED on 2026-08-27 (this machine, a residential IP, was IP-blocked for
-      hours after a burst harvest). A residential IP still lowers block risk vs. a
-      shared cloud IP, but "never" was wrong and rate matters more than IP class at
-      our volume. See `docs/transcript-blocking.md` for the full incident writeup,
-      the proxy-vs-pacing recommendation (don't buy a proxy yet), and how to
-      configure `WebshareProxyConfig` support (already wired, off by default) if it
-      later becomes warranted. Verify with `scratchpad/yt_block_probe.py` from an
-      EC2 box before building.
-- [ ] **Web app** (single-user, no auth). Four screens worth building:
-      1. Action queue — ranked "do this by then", with TWO clocks (nightly price
-         change ~01:30 UTC, and the gameweek deadline).
-      2. Evidence trail — click a recommendation, get the creator quotes with
-         timestamped YouTube deep links. The differentiator; no other tool has it.
-      3. Consensus momentum — who's gaining/losing backing over days. This is the
-         entire payoff of daily harvesting; a weekly snapshot destroys it.
-      4. My squad — availability, price risk, sentiment per player.
-- [ ] Explicitly NOT building: a predicted-points table (every site has one, ours
-      would be worse), and auto-apply/autopilot (FPL has no write API — it means
-      automating against their session, an account-risk question).
+Design is settled in `docs/web-app-design.md` (19 decisions, four tab specs,
+north star). This is the ordered work list; tick here as things land.
+
+### Claude: engine, database, API
+
+- [ ] **Database** — SQLite via SQLAlchemy + Alembic (Postgres later is a
+      connection string). One table per thing the pipeline already emits:
+      runs, creators, players, videos, transcripts, picks + votes, chip
+      plans, per-run consensus scores, solver squad, transfer
+      recommendation, decisions, daily prices. Carry `quote` and
+      `timestamp_s` columns on picks from day one even though extraction
+      does not fill them yet. Pipeline writes each run; a one-off backfill
+      loads the run folders already under `data/runs/`.
+- [ ] **Read-only API** — FastAPI over the DB plus a thin live layer. One
+      endpoint per screen element (latest run, run by id, my squad, report
+      text, creator ownership table + grid, evidence per player, price
+      history, live gameweek feed). Every endpoint named and documented as
+      a tool a model could call (north star). OpenAPI → a script that
+      regenerates TypeScript types under `web/src/api/`.
+- [ ] **Live module in `fpl/`** — `event/{gw}/live/`, `fixtures/`, bonus
+      from BPS, predicted autosubs; pure functions over API responses.
+- [ ] **Dev loop** — one command runs API + web; Docker Compose with
+      Postgres for later; a fixture DB with sample data so the front end
+      can be built without running a pipeline.
+- [ ] **Quote + timestamp extraction** — verbatim `quote` per pick with a
+      mechanical substring check; `timestamp_s` only where the transcript
+      has trusted timings (Gemini reads are `:untimed` until timing
+      enrichment lands). Was targeted for GW4; slipped. The evidence
+      trail ships with paraphrase + video link until this lands.
+
+### Owner: front end (`web/`, learning project, morsel-taught)
+
+- [x] Vite + React + TS scaffold (committed 2026-09-12).
+- [ ] Tailwind + shadcn/ui, tabs shell.
+- [ ] My squad tab against generated types (planning state first, live
+      state once the live module exists); pitch/table toggle.
+- [ ] Report tab (markdown as-is, then sections rebuilt one at a time).
+- [ ] Creator ownership grid.
+- [ ] Evidence trail (paraphrase + link now; quote + deep link later).
+
+### Deployment (after the tabs work)
+
+- [ ] S3 + CloudFront for `web/`; Lambda or a small container for the
+      API; the pipeline's cloud half scheduled; managed Postgres. All in
+      the existing CDK app under `infra/` (TypeScript).
+- [ ] **Durable storage for the pipeline** is already started: prices live
+      in S3. Transcripts and run records must follow before any pipeline
+      stage moves to the cloud — an ephemeral cache means re-reading the
+      season every run.
+- [ ] Explicitly NOT building: a predicted-points table, and any write to
+      FPL (decision 19: the site never writes to FPL; hand-off checklist
+      instead).
+
+### Later releases (designed for now, not built)
+
+- Controls: buttons that enqueue warm / extract / solve as jobs with
+  visible status (job endpoints, never long-running requests).
+- Assistant text box: an LLM with tool use over the site's own API.
+- Live rank estimate; run-over-run ownership change (needs history —
+  the schema keeps per-run votes so it is possible).
+- Consensus momentum across days — the payoff of daily harvesting.
 
 ## KNOWN ISSUES
 
