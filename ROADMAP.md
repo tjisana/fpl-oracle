@@ -212,9 +212,12 @@ north star). This is the ordered work list; tick here as things land.
 ### Owner: front end (`web/`, learning project, morsel-taught)
 
 - [x] Vite + React + TS scaffold (committed 2026-09-12).
-- [ ] Tailwind + shadcn/ui, tabs shell.
-- [ ] My squad tab against generated types (planning state first, live
-      state once the live module exists); pitch/table toggle.
+- [x] Tailwind + shadcn/ui, tabs shell — built 2026-09-14 by Impeccable as
+      the reference, with the design system: the Pools Coupon world
+      (PRODUCT.md, DESIGN.md, `web/src/index.css` tokens, `components/coupon/`).
+- [x] My squad tab, PLANNING state — the reference tab, built 2026-09-14
+      against a fixture cut from the real GW4 run (`web/src/fixtures/`).
+      Owner: the LIVE state, once the live module exists.
 - [ ] Report tab (markdown as-is, then sections rebuilt one at a time).
 - [ ] Creator ownership grid.
 - [ ] Evidence trail (paraphrase + link now; quote + deep link later).

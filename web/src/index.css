@@ -1,111 +1,459 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/archivo/wdth.css";
+
+/* ------------------------------------------------------------------
+   fpl-oracle — the Pools Coupon world
+   Paper ground, black print ink, one spot colour for everything the
+   printer set, biro blue for everything the user marks, red only for
+   the rubber stamp and for a player who cannot play.
+   ------------------------------------------------------------------ */
+
+@custom-variant dark (&:is(.dark *));
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* materials */
+  --paper: #f4f1ea;
+  --paper-deep: #e9e4d8;      /* second neutral: column heads, bench band */
+  --ink: #161513;
+  --ink-soft: #55524b;        /* secondary text, tinted from ink, never grey */
+  --rule: color-mix(in oklab, var(--ink) 28%, var(--paper));
+  --rule-strong: color-mix(in oklab, var(--ink) 55%, var(--paper));
+  --spot: #1f4fb4;            /* the coupon's single print colour */
+  --spot-deep: #173d8c;
+  --on-spot: #f4f1ea;
+  --biro: #2a5bd7;            /* what the user writes */
+  --stamp: #c8102e;           /* the date stamp; a player who cannot play */
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* type: one family, two widths */
+  --font: "Archivo Variable", "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --wdth-print: 78%;          /* condensed: coupon rows, labels, heads */
+  --wdth-text: 100%;          /* running text */
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* fixed rem scale, ratio ~1.2 */
+  --t-xs: 0.75rem;
+  --t-sm: 0.8125rem;
+  --t-base: 0.9375rem;
+  --t-md: 1.125rem;
+  --t-lg: 1.375rem;
+  --t-xl: 1.75rem;
+  --t-2xl: 2.25rem;
 
-  @media (max-width: 1024px) {
+  /* spacing rhythm */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-6: 1.5rem;
+  --s-8: 2rem;
+  --s-12: 3rem;
+
+  /* shadcn semantic hooks, mapped onto the world so any primitive
+     (Button, Tabs, Checkbox) is printed in coupon ink, not stock */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper);
+  --card-foreground: var(--ink);
+  --popover: var(--paper);
+  --popover-foreground: var(--ink);
+  --primary: var(--spot);
+  --primary-foreground: var(--on-spot);
+  --secondary: var(--paper-deep);
+  --secondary-foreground: var(--ink);
+  --muted: var(--paper-deep);
+  --muted-foreground: var(--ink-soft);
+  --accent: var(--paper-deep);
+  --accent-foreground: var(--ink);
+  --destructive: var(--stamp);
+  --border: var(--rule);
+  --input: var(--rule-strong);
+  --ring: var(--biro);
+  --radius: 0rem;
+
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-deep: var(--paper-deep);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-spot: var(--spot);
+  --color-spot-deep: var(--spot-deep);
+  --color-on-spot: var(--on-spot);
+  --color-biro: var(--biro);
+  --color-stamp: var(--stamp);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: var(--font);
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+}
+
+/* ---------- base: the parts we did not draw still carry the design ---------- */
+
+@layer base {
+  * {
+    border-color: var(--rule);
+  }
+  html {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
     font-size: 16px;
+    font-variation-settings: "wdth" var(--wdth-text);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    caret-color: var(--biro);
+    scrollbar-color: var(--rule-strong) var(--paper);
+  }
+  body {
+    margin: 0;
+    line-height: 1.4;
+    font-size: var(--t-base);
+  }
+  ::selection {
+    background: var(--spot);
+    color: var(--on-spot);
+  }
+  :focus-visible {
+    outline: 2px solid var(--biro);
+    outline-offset: 2px;
+  }
+  a {
+    color: var(--spot);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  button {
+    font: inherit;
+    color: inherit;
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+/* ---------- print vocabulary ---------- */
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+/* Condensed printed setting: column heads, labels, row text. */
+.print {
+  font-variation-settings: "wdth" var(--wdth-print);
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
+/* Printed column head: small caps-like tracking on condensed type. */
+.head {
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+/* A printed figure: tabular, slightly larger, weight carries emphasis. */
+.figure {
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-size: var(--t-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Printed note under a figure — when it was true. */
+.pinned {
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+}
+
+/* Hairline rules, the coupon's only structure. */
+.rule-b { border-bottom: 1px solid var(--rule); }
+.rule-t { border-top: 1px solid var(--rule); }
+.rule-strong-b { border-bottom: 1px solid var(--rule-strong); }
+
+/* ---------- header strip ---------- */
+
+.strip {
+  background: var(--spot);
+  color: var(--on-spot);
+}
+.strip a { color: inherit; }
+
+/* Tabs printed as coupon sections: underline in spot ink marks the open one. */
+.tabbar {
   display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  flex-wrap: nowrap;
+  gap: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-
-body {
-  margin: 0;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+.tabbar::-webkit-scrollbar { display: none; }
+/* on a phone the row scrolls; the fade at the edge says so */
+@media (max-width: 767px) {
+  .tabbar {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
   }
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
+.tab {
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  transition: color 150ms ease-out, border-color 150ms ease-out;
 }
-p {
-  margin: 0;
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] {
+  color: var(--spot);
+  border-bottom-color: var(--spot);
 }
 
-code,
-.counter {
-  font-family: var(--mono);
+/* ---------- the rubber stamp ---------- */
+
+.stamp {
+  display: inline-block;
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--stamp);
+  border: 2px solid var(--stamp);
+  outline: 1px solid var(--stamp);
+  outline-offset: 2px;
+  padding: var(--s-1) var(--s-3);
+  transform: rotate(-2.5deg);
+  line-height: 1.15;
+}
+.stamp.on-spot {
+  color: var(--on-spot);
+  border-color: var(--on-spot);
+  outline-color: var(--on-spot);
+}
+
+/* ---------- coupon boxes (the checklist) ---------- */
+
+.box {
+  --size: 1.75rem;
+  position: relative;
+  inline-size: var(--size);
+  block-size: var(--size);
+  flex: none;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+.box:hover { background: color-mix(in oklab, var(--biro) 8%, var(--paper)); }
+.box input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.box svg {
+  position: absolute;
+  inset: 10%;
+  inline-size: 80%;
+  block-size: 80%;
+  pointer-events: none;
+  color: var(--biro);
+}
+.box svg path {
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  fill: none;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+}
+/* the biro X is drawn, not switched: one authored moment */
+.box input:checked ~ svg path {
+  animation: biro 220ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.box input:checked ~ svg path:nth-child(2) { animation-delay: 120ms; }
+@keyframes biro {
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .box input:checked ~ svg path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+.box input:focus-visible ~ svg,
+.box:has(input:focus-visible) {
+  outline: 2px solid var(--biro);
+  outline-offset: 2px;
+}
+.box.disabled { cursor: default; border-style: dashed; border-color: var(--rule-strong); }
+
+/* ---------- coupon rows (the fifteen) ---------- */
+
+.coupon {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-size: var(--t-base);
+}
+.coupon thead th {
+  /* pinned while the fifteen scroll (desktop; on a phone the table scrolls sideways instead) */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--paper-deep);
+  text-align: left;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: var(--s-2) var(--s-2);
+  border-bottom: 1px solid var(--rule-strong);
+}
+.coupon tbody td {
+  padding: var(--s-2) var(--s-2);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+.coupon tbody tr:hover td { background: color-mix(in oklab, var(--spot) 6%, var(--paper)); }
+.coupon .num { color: var(--ink-soft); font-size: var(--t-sm); }
+.coupon .right { text-align: right; }
+.coupon .bench-band td {
+  background: var(--paper-deep);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-block: var(--s-1);
+  border-bottom: 1px solid var(--rule-strong);
+}
+.coupon tr.out td { color: var(--ink-soft); }
+.coupon tr.out td .name { text-decoration: line-through; text-decoration-color: var(--stamp); }
+
+/* The tally — the only drawn thing on the coupon. One cell per creator. */
+.tally {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 2px;
+  vertical-align: middle;
+}
+.tally i {
+  display: block;
+  inline-size: 6px;
+  block-size: 12px;
+  border: 1px solid var(--ink);
+}
+.tally i.on { background: var(--spot); border-color: var(--spot); }
+/* a phone prints the coupon tighter: narrower cells, a finer tally */
+@media (max-width: 767px) {
+  .coupon thead th, .coupon tbody td { padding-inline: var(--s-1); }
+  .coupon thead th:first-child, .coupon tbody td:first-child { padding-inline-start: 0; }
+  .tally { gap: 1px; }
+  .tally i { inline-size: 5px; block-size: 10px; }
+}
+
+.avail-out { color: var(--stamp); font-weight: 700; }
+.avail-doubt { color: var(--ink); font-weight: 600; }
+
+/* captain / vice marks as printed circled letters */
+.mark {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-inline-start: var(--s-1);
+}
+.mark.c { background: var(--ink); color: var(--paper); }
+
+/* ---------- the stub ---------- */
+
+.stub {
+  border-top: 2px dashed var(--rule-strong);
+  padding-top: var(--s-4);
+}
+.stub-action {
   display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+  align-items: center;
+  gap: var(--s-2);
+  background: var(--spot);
+  color: var(--on-spot);
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-size: var(--t-md);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  padding: var(--s-3) var(--s-6);
+  transition: background-color 150ms ease-out;
+}
+.stub-action:hover { background: var(--spot-deep); }
+
+/* ---------- the printed pitch ---------- */
+
+.pitch-panel svg { inline-size: 100%; block-size: auto; display: block; }
+.pitch-panel .line { stroke: var(--spot); stroke-width: 1.5; fill: none; }
+.pitch-panel .disc { fill: var(--paper); stroke: var(--ink); stroke-width: 1.5; }
+.pitch-panel .disc-c { fill: var(--ink); }
+.pitch-panel text {
+  font-family: var(--font);
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-weight: 600;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+/* text button in the print vocabulary */
+.textbtn {
+  font-variation-settings: "wdth" var(--wdth-print);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--spot);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  background: none;
+  border: 0;
+  padding: var(--s-1) 0;
+  cursor: pointer;
+}
+.textbtn:hover { color: var(--spot-deep); }
+
+/* empty state for sections not yet printed */
+.unprinted {
+  border: 1px dashed var(--rule-strong);
+  padding: var(--s-8) var(--s-6);
+  color: var(--ink-soft);
+  max-inline-size: 60ch;
 }

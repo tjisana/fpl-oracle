@@ -154,3 +154,21 @@ Infrastructure as code in TypeScript (CDK) to hit two target skills at once.
 
 A predicted-points table (every site has one; ours would be worse) and
 auto-apply/autopilot (FPL has no write API).
+
+## Visual world (decided 2026-09-14)
+
+Chosen through the Impeccable design flow: **The Pools Coupon** — the
+weekly British football pools coupon as the interface. Paper ground,
+black print ink, one spot colour (coupon blue) for everything the printer
+set, biro blue for everything the owner marks, red only for the rubber
+stamp and a player who cannot play; one condensed grotesque family
+(Archivo, width axis) with tabular figures; hairline rules, square boxes,
+no shadows or cards. Alternatives on the table were a dressing-room
+tactics board (the category's own picture, rejected for distinctiveness)
+and the category standard (dark pitch, neon accent). Product truth lives
+in `PRODUCT.md`; the built system is recorded in `DESIGN.md`; the
+direction contract in `.impeccable/surfaces/`. Work split amended: the
+design system, app shell and the My squad planning tab were built as the
+reference; the owner builds the other three tabs and the live state
+against it.
+

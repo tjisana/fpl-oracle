@@ -21,3 +21,9 @@ __pycache__/
 
 # agent worktrees (other sessions' in-progress trees)
 .claude/worktrees/
+
+# impeccable: decision-page logs and generated mocks are session artifacts
+.impeccable/questions/
+.impeccable/mocks/
+.impeccable/review/
+.impeccable/build/

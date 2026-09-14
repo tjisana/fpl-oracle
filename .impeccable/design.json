@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-14T00:00:00Z",
+  "title": "Design System: fpl-oracle",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Coupon Paper",
+        "canonical": "#f4f1ea",
+        "tonalRamp": ["oklch(20% 0.012 85)", "oklch(31% 0.014 85)", "oklch(42% 0.016 85)", "oklch(54% 0.017 85)", "oklch(66% 0.018 85)", "oklch(78% 0.016 85)", "oklch(88% 0.013 85)", "oklch(96% 0.010 85)"]
+      },
+      "paper-deep": {
+        "role": "neutral",
+        "displayName": "Second Stock",
+        "canonical": "#e9e4d8",
+        "tonalRamp": ["oklch(20% 0.018 88)", "oklch(31% 0.021 88)", "oklch(42% 0.024 88)", "oklch(54% 0.026 88)", "oklch(66% 0.026 88)", "oklch(78% 0.024 88)", "oklch(88% 0.021 88)", "oklch(96% 0.016 88)"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Print Ink",
+        "canonical": "#161513",
+        "tonalRamp": ["oklch(15% 0.006 80)", "oklch(26% 0.008 80)", "oklch(37% 0.009 80)", "oklch(49% 0.010 80)", "oklch(61% 0.010 80)", "oklch(73% 0.009 80)", "oklch(85% 0.007 80)", "oklch(95% 0.005 80)"]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Soft Ink",
+        "canonical": "#55524b",
+        "tonalRamp": ["oklch(15% 0.010 85)", "oklch(26% 0.012 85)", "oklch(37% 0.013 85)", "oklch(49% 0.014 85)", "oklch(61% 0.013 85)", "oklch(73% 0.012 85)", "oklch(85% 0.009 85)", "oklch(95% 0.006 85)"]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "color-mix(in oklab, #161513 28%, #f4f1ea)",
+        "tonalRamp": ["oklch(15% 0.008 83)", "oklch(26% 0.010 83)", "oklch(37% 0.011 83)", "oklch(49% 0.012 83)", "oklch(61% 0.012 83)", "oklch(73% 0.011 83)", "oklch(85% 0.008 83)", "oklch(95% 0.006 83)"]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Heavy Rule",
+        "canonical": "color-mix(in oklab, #161513 55%, #f4f1ea)",
+        "tonalRamp": ["oklch(15% 0.009 83)", "oklch(26% 0.011 83)", "oklch(37% 0.012 83)", "oklch(49% 0.013 83)", "oklch(61% 0.012 83)", "oklch(73% 0.011 83)", "oklch(85% 0.009 83)", "oklch(95% 0.006 83)"]
+      },
+      "spot": {
+        "role": "primary",
+        "displayName": "Coupon Blue",
+        "canonical": "#1f4fb4",
+        "tonalRamp": ["oklch(20% 0.090 262)", "oklch(30% 0.130 262)", "oklch(40% 0.165 262)", "oklch(48% 0.180 262)", "oklch(60% 0.160 262)", "oklch(72% 0.120 262)", "oklch(85% 0.070 262)", "oklch(95% 0.028 262)"]
+      },
+      "spot-deep": {
+        "role": "primary",
+        "displayName": "Press Blue",
+        "canonical": "#173d8c",
+        "tonalRamp": ["oklch(20% 0.085 264)", "oklch(30% 0.125 264)", "oklch(39% 0.150 264)", "oklch(50% 0.150 264)", "oklch(61% 0.130 264)", "oklch(73% 0.100 264)", "oklch(85% 0.060 264)", "oklch(95% 0.024 264)"]
+      },
+      "on-spot": {
+        "role": "neutral",
+        "displayName": "Paper on Spot",
+        "canonical": "#f4f1ea",
+        "tonalRamp": ["oklch(20% 0.012 85)", "oklch(31% 0.014 85)", "oklch(42% 0.016 85)", "oklch(54% 0.017 85)", "oklch(66% 0.018 85)", "oklch(78% 0.016 85)", "oklch(88% 0.013 85)", "oklch(96% 0.010 85)"]
+      },
+      "biro": {
+        "role": "secondary",
+        "displayName": "Biro Blue",
+        "canonical": "#2a5bd7",
+        "tonalRamp": ["oklch(20% 0.095 266)", "oklch(30% 0.140 266)", "oklch(40% 0.180 266)", "oklch(52% 0.205 266)", "oklch(63% 0.170 266)", "oklch(74% 0.125 266)", "oklch(86% 0.072 266)", "oklch(95% 0.030 266)"]
+      },
+      "stamp": {
+        "role": "tertiary",
+        "displayName": "Stamp Red",
+        "canonical": "#c8102e",
+        "tonalRamp": ["oklch(20% 0.090 25)", "oklch(30% 0.130 25)", "oklch(40% 0.170 25)", "oklch(50% 0.200 25)", "oklch(62% 0.180 25)", "oklch(74% 0.135 25)", "oklch(86% 0.080 25)", "oklch(95% 0.032 25)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The product name in the header strip. One per page." },
+      "figure": { "displayName": "Figure", "purpose": "A printed number — bank, team value, points, entry number. Always sits under a head." },
+      "head": { "displayName": "Printed Head", "purpose": "Column heads, section heads, the bench band, and run-in labels like After / Marked." },
+      "tab": { "displayName": "Tab / Action", "purpose": "Tab bar, text buttons, the stub action, the stamp." },
+      "row": { "displayName": "Coupon Row", "purpose": "Condensed tabular row text in the table of the fifteen." },
+      "body": { "displayName": "Body", "purpose": "Checklist labels and prose, set at text width. Capped at 60ch." },
+      "pinned": { "displayName": "Pinned Note", "purpose": "When a figure was true, or the caveat under an action. Never larger." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "biro-draw", "value": "220ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards (stroke-dashoffset 40 -> 0; second stroke delayed 120ms)", "purpose": "The one authored moment: the biro X is drawn onto a marked coupon box, not switched on. Guarded by prefers-reduced-motion." },
+      { "name": "ink-shift", "value": "150ms ease-out", "purpose": "Every other state change: tab colour and underline, box hover wash, stub and text-button hover. Colour only, never transform." }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "max-width: 767px" },
+      { "name": "md", "value": "768px" },
+      { "name": "sheet", "value": "72rem (max content width)" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Stub Action",
+      "kind": "button",
+      "refersTo": "stub-action",
+      "description": "The hand-off: the only full-spot element on the page, under the dashed tear line. One per page.",
+      "html": "<div class=\"ds-stub\"><a class=\"ds-stub-action\" href=\"#\">Hand in at FPL <svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.25\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M15 3h6v6\"/><path d=\"M10 14 21 3\"/><path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\"/></svg></a><p class=\"ds-pinned\">Opens the official transfers page in a new tab. Your marks here are yours alone; this site never writes to FPL.</p></div>",
+      "css": ".ds-stub { border-top: 2px dashed var(--rule-strong, #8a8378); padding-top: 1rem; font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; } .ds-stub-action { display: inline-flex; align-items: center; gap: 0.5rem; background: var(--spot, #1f4fb4); color: var(--on-spot, #f4f1ea); font-variation-settings: \"wdth\" 78; font-size: 1.125rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 0; transition: background-color 150ms ease-out; } .ds-stub-action:hover { background: var(--spot-deep, #173d8c); } .ds-stub-action:focus-visible { outline: 2px solid var(--biro, #2a5bd7); outline-offset: 2px; } .ds-pinned { font-size: 0.75rem; color: var(--ink-soft, #55524b); margin: 0.75rem 0 0; max-inline-size: 48ch; }"
+    },
+    {
+      "name": "Text Button",
+      "kind": "button",
+      "refersTo": "textbtn",
+      "description": "Every secondary action in the system: a spot-ink underlined printed label. No filled secondary button exists.",
+      "html": "<button class=\"ds-textbtn\">Pitch view</button>",
+      "css": ".ds-textbtn { font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; font-variation-settings: \"wdth\" 78; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--spot, #1f4fb4); text-decoration: underline; text-underline-offset: 0.2em; background: none; border: 0; border-radius: 0; padding: 0.25rem 0; cursor: pointer; } .ds-textbtn:hover { color: var(--spot-deep, #173d8c); } .ds-textbtn:focus-visible { outline: 2px solid var(--biro, #2a5bd7); outline-offset: 2px; }"
+    },
+    {
+      "name": "Coupon Box",
+      "kind": "input",
+      "refersTo": "box",
+      "description": "The checklist checkbox: a square you mark with a drawn biro X. The one authored motion in the system.",
+      "html": "<label class=\"ds-box\"><input type=\"checkbox\" checked><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M4 3.5 L20.5 20\"/><path d=\"M20 4 L3.5 20.5\"/></svg></label>",
+      "css": ".ds-box { --size: 1.75rem; position: relative; display: block; inline-size: var(--size); block-size: var(--size); border: 1.5px solid var(--ink, #161513); border-radius: 0; background: var(--paper, #f4f1ea); cursor: pointer; transition: background-color 150ms ease-out; } .ds-box:hover { background: color-mix(in oklab, var(--biro, #2a5bd7) 8%, var(--paper, #f4f1ea)); } .ds-box input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; } .ds-box svg { position: absolute; inset: 10%; inline-size: 80%; block-size: 80%; pointer-events: none; color: var(--biro, #2a5bd7); } .ds-box svg path { stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; fill: none; stroke-dasharray: 40; stroke-dashoffset: 40; } .ds-box input:checked ~ svg path { animation: ds-biro 220ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards; } .ds-box input:checked ~ svg path:nth-child(2) { animation-delay: 120ms; } @keyframes ds-biro { to { stroke-dashoffset: 0; } } @media (prefers-reduced-motion: reduce) { .ds-box input:checked ~ svg path { animation: none; stroke-dashoffset: 0; } } .ds-box:has(input:focus-visible) { outline: 2px solid var(--biro, #2a5bd7); outline-offset: 2px; }"
+    },
+    {
+      "name": "Countdown Stamp",
+      "kind": "custom",
+      "refersTo": "stamp",
+      "description": "The rubber stamp: the closing clock, double-ruled and rotated. Reverses to paper on the spot strip. Nothing else is stamped.",
+      "html": "<div class=\"ds-strip\"><span class=\"ds-stamp ds-stamp-on-spot\">Closes in 4h 05m</span></div><p><span class=\"ds-stamp\">Closed</span></p>",
+      "css": ".ds-strip { background: var(--spot, #1f4fb4); padding: 0.75rem 1rem; margin-bottom: 1rem; } .ds-stamp { display: inline-block; font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; font-variation-settings: \"wdth\" 78; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--stamp, #c8102e); border: 2px solid var(--stamp, #c8102e); border-radius: 0; outline: 1px solid var(--stamp, #c8102e); outline-offset: 2px; padding: 0.25rem 0.75rem; transform: rotate(-2.5deg); line-height: 1.15; } .ds-stamp-on-spot { color: var(--on-spot, #f4f1ea); border-color: var(--on-spot, #f4f1ea); outline-color: var(--on-spot, #f4f1ea); }"
+    },
+    {
+      "name": "Tab Bar",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "The four sections printed as coupon headings. One scrolling row with an edge mask on a phone.",
+      "html": "<div class=\"ds-tabbar\" role=\"tablist\"><button class=\"ds-tab\" role=\"tab\" aria-selected=\"true\">My squad</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Report</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Creator ownership</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Evidence trail</button></div>",
+      "css": ".ds-tabbar { display: flex; flex-wrap: nowrap; gap: 0; border-bottom: 1px solid var(--rule-strong, #8a8378); overflow-x: auto; scrollbar-width: none; } .ds-tabbar::-webkit-scrollbar { display: none; } .ds-tab { font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; font-variation-settings: \"wdth\" 78; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.75rem 1rem; background: none; border: 0; border-bottom: 3px solid transparent; border-radius: 0; margin-bottom: -1px; white-space: nowrap; color: var(--ink-soft, #55524b); cursor: pointer; transition: color 150ms ease-out, border-color 150ms ease-out; } .ds-tab:hover { color: var(--ink, #161513); } .ds-tab[aria-selected=\"true\"] { color: var(--spot, #1f4fb4); border-bottom-color: var(--spot, #1f4fb4); } .ds-tab:focus-visible { outline: 2px solid var(--biro, #2a5bd7); outline-offset: 2px; }"
+    },
+    {
+      "name": "Coupon Rows",
+      "kind": "custom",
+      "refersTo": "coupon-row",
+      "description": "The fifteen as numbered coupon rows: second-stock column heads (sticky on desktop), hairline rows, a bench band, and an out row struck in stamp red.",
+      "html": "<table class=\"ds-coupon\"><thead><tr><th>No.</th><th>Pos</th><th>Player</th><th>Club</th><th class=\"ds-right\">£m</th><th>Avail.</th></tr></thead><tbody><tr><td class=\"ds-num\">1</td><td>GK</td><td><span class=\"ds-name\">Kinsky</span></td><td>TOT</td><td class=\"ds-right\">4.5</td><td class=\"ds-num\">—</td></tr><tr><td class=\"ds-num\">2</td><td>FWD</td><td><span class=\"ds-name\">Haaland</span><span class=\"ds-mark ds-mark-c\">C</span></td><td>MCI</td><td class=\"ds-right\">15.5</td><td class=\"ds-num\">—</td></tr><tr class=\"ds-bench-band\"><td colspan=\"6\">Bench, in order</td></tr><tr class=\"ds-out\"><td class=\"ds-num\">3</td><td>MID</td><td><span class=\"ds-name\">Chiesa</span></td><td>LIV</td><td class=\"ds-right\">5.4</td><td class=\"ds-avail-out\">Injured</td></tr></tbody></table>",
+      "css": ".ds-coupon { inline-size: 100%; border-collapse: collapse; font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; font-variation-settings: \"wdth\" 78; font-variant-numeric: tabular-nums; font-size: 0.9375rem; color: var(--ink, #161513); } .ds-coupon thead th { position: sticky; top: 0; background: var(--paper-deep, #e9e4d8); text-align: left; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.5rem; border-bottom: 1px solid var(--rule-strong, #8a8378); } .ds-coupon tbody td { padding: 0.5rem; border-bottom: 1px solid var(--rule, #b7b1a5); vertical-align: middle; } .ds-coupon tbody tr:hover td { background: color-mix(in oklab, var(--spot, #1f4fb4) 6%, var(--paper, #f4f1ea)); } .ds-num { color: var(--ink-soft, #55524b); font-size: 0.8125rem; } .ds-right { text-align: right; } .ds-name { font-weight: 600; } .ds-bench-band td { background: var(--paper-deep, #e9e4d8); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding-block: 0.25rem; border-bottom: 1px solid var(--rule-strong, #8a8378); } .ds-out td { color: var(--ink-soft, #55524b); } .ds-out td .ds-name { text-decoration: line-through; text-decoration-color: var(--stamp, #c8102e); } .ds-avail-out { color: var(--stamp, #c8102e); font-weight: 700; } .ds-mark { display: inline-grid; place-items: center; inline-size: 1.25rem; block-size: 1.25rem; border: 1.5px solid var(--ink, #161513); border-radius: 50%; font-size: 0.7rem; font-weight: 700; margin-inline-start: 0.25rem; } .ds-mark-c { background: var(--ink, #161513); color: var(--paper, #f4f1ea); }"
+    },
+    {
+      "name": "Tally",
+      "kind": "chip",
+      "refersTo": "coupon-row",
+      "description": "One outlined cell per contributing creator, filled in spot for each backer. A printed count, never a bar or a percentage.",
+      "html": "<span class=\"ds-tally\" role=\"img\" aria-label=\"6 of 14 creators back this player\"><i class=\"on\"></i><i class=\"on\"></i><i class=\"on\"></i><i class=\"on\"></i><i class=\"on\"></i><i class=\"on\"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class=\"ds-tally-n\">6</span>",
+      "css": ".ds-tally { display: inline-grid; grid-auto-flow: column; gap: 2px; vertical-align: middle; } .ds-tally i { display: block; inline-size: 6px; block-size: 12px; border: 1px solid var(--ink, #161513); } .ds-tally i.on { background: var(--spot, #1f4fb4); border-color: var(--spot, #1f4fb4); } .ds-tally-n { margin-inline-start: 0.5rem; font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; font-variation-settings: \"wdth\" 78; font-variant-numeric: tabular-nums; font-size: 0.8125rem; color: var(--ink-soft, #55524b); } @media (max-width: 767px) { .ds-tally { gap: 1px; } .ds-tally i { inline-size: 5px; block-size: 10px; } }"
+    },
+    {
+      "name": "Perm Line Figure",
+      "kind": "card",
+      "refersTo": "coupon-head",
+      "description": "The canonical figure block: printed head, figure, pinned moment. Every number on the site is presented this way. There are no cards.",
+      "html": "<dl class=\"ds-perm\"><div><dt class=\"ds-head\">Bank</dt><dd class=\"ds-figure\">£0.1m</dd></div><div><dt class=\"ds-head\">Overall</dt><dd class=\"ds-figure\">207 pts</dd><dd class=\"ds-pin\">rank 1,609,471</dd></div><p class=\"ds-pin ds-span\">As of run 12 Sept 04:11 UTC. Nothing here is predicted.</p></dl>",
+      "css": ".ds-perm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; margin: 0; padding-bottom: 1rem; border-bottom: 1px solid var(--rule-strong, #8a8378); font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; color: var(--ink, #161513); } .ds-head { font-variation-settings: \"wdth\" 78; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; } .ds-figure { font-variation-settings: \"wdth\" 78; font-variant-numeric: tabular-nums; font-size: 1.125rem; font-weight: 600; letter-spacing: 0.01em; margin: 0.25rem 0 0; } .ds-pin { font-size: 0.75rem; color: var(--ink-soft, #55524b); margin: 0.125rem 0 0; } .ds-span { grid-column: 1 / -1; }"
+    },
+    {
+      "name": "Unprinted",
+      "kind": "custom",
+      "refersTo": "unprinted",
+      "description": "The empty state for a section not yet built. No spinner, no skeleton, no placeholder card.",
+      "html": "<div class=\"ds-unprinted\"><p class=\"ds-head\">Not on this week's coupon yet</p><p class=\"ds-copy\">The Report section is next to be printed. It reads the same run record as My squad and inherits this coupon's vocabulary: printed heads, hairline rules, one spot colour, biro for anything you mark.</p></div>",
+      "css": ".ds-unprinted { border: 1px dashed var(--rule-strong, #8a8378); border-radius: 0; padding: 2rem 1.5rem; color: var(--ink-soft, #55524b); max-inline-size: 60ch; font-family: \"Archivo Variable\", Archivo, \"Helvetica Neue\", Arial, sans-serif; } .ds-unprinted .ds-head { font-variation-settings: \"wdth\" 78; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink, #161513); margin: 0 0 0.5rem; } .ds-copy { margin: 0; font-size: 0.9375rem; line-height: 1.4; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Pools Coupon",
+    "overview": "The site is this week's football pools coupon: a sheet of warm paper, set in black print ink, ruled with hairlines, numbered down the left, with boxes you mark in biro and a stub you hand in. One spot colour — coupon blue — is what the printer had on the press that week, so it appears on the header strip, the stub button, the open tab, the filled tally cells and the pitch drawing, and nowhere else. Red is not a palette colour; it is the rubber stamp the clerk banged on the sheet, and it says two things only: when the coupon closes, and who cannot play.\n\nDensity is printed density, not app density. Hairline rules do all the work that a card and a shadow would do elsewhere: a rule-strong line under a section head, a rule line under every coupon row, a dashed tear line above the stub. There is no elevation anywhere on the page, no gradient fill, no rounded container, no shadow. A figure never floats; it sits in a column under a printed head with its moment pinned underneath it (\"As of run 12 Sept 04:11 UTC\").\n\nThe world is deliberately the opposite of the category. FPL tools are dark pitches of shirt badges over neon stat cards; this is a paper document that tells you what to do, shows you what it read, and admits what it does not know. Nothing on the page is predicted; every number is a thing that was true at a stated time.",
+    "keyCharacteristics": [
+      "Warm paper ground, black print ink, no dark mode.",
+      "One spot colour, used structurally, never decoratively.",
+      "Biro blue for everything the user marks; red for the stamp only.",
+      "One variable type family, printed condensed (78% width) or set at text width (100%), on a fixed rem scale.",
+      "Zero radius, zero shadow, zero gradient fill. Hairline rules instead.",
+      "Tabular numerals everywhere; every figure pinned to its moment."
+    ],
+    "rules": [
+      { "name": "The Who-Printed-It Rule", "body": "Spot blue is the printer's; biro blue is the user's. A colour choice is settled by asking who put the mark on the paper. A checkbox X is biro. A filled tally cell is spot, because the coupon was printed with those backers already counted.", "section": "colors" },
+      { "name": "The Stamp Rule", "body": "Red appears only on the closing stamp and on a player who cannot play. It never marks a falling price, a warning, a low score, or a destructive button. A price change prints in soft ink and lets the sign (+ / −) carry the direction.", "section": "colors" },
+      { "name": "The No-Grey Rule", "body": "Every neutral is mixed from ink and paper, so the page stays warm. Never introduce a pure grey, a pure white, or a pure black.", "section": "colors" },
+      { "name": "The Two-Widths Rule", "body": "If it is printed on the coupon — a head, a row, a figure, a button — it is condensed at 78%. If it is something to read — a sentence, a detail, a caveat — it is at 100%. Nothing else on the width axis.", "section": "typography" },
+      { "name": "The Pinned Figure Rule", "body": "No figure appears without its moment. Every number either carries a pinned note under it or sits in a block whose pinned line states the run time and prices-as-of. Nothing predicted is printed at all.", "section": "typography" },
+      { "name": "The Tabular Rule", "body": "Tabular numerals are on globally. Do not turn them off for \"nicer\" proportional figures; the coupon's columns must align down the page.", "section": "typography" },
+      { "name": "The One Sheet Rule", "body": "The page is one document, not a stack of panels. Do not introduce a second scroll container, a sidebar that scrolls independently, or a sticky footer bar. The only sticky element in the system is the desktop column head.", "section": "layout" },
+      { "name": "The Flat Paper Rule", "body": "If a surface needs to feel separate, give it a rule or a second-stock band. Never a shadow, never a border-radius, never a gradient fill.", "section": "elevation" },
+      { "name": "The Square Corner Rule", "body": "Radius is 0 everywhere. The only exception is a printed circled letter (the C/V marks and the pitch discs). If a new component wants a rounded corner, it wants to be a different product.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do print anything structural — head, row, figure, button, tab — in condensed setting (wdth 78%) and anything readable at text width (100%).",
+      "Do give every figure a head above it and a pinned note beneath it stating when it was true.",
+      "Do separate with a rule: hairline between peers, heavy rule between sections, 2px dashed for a tear line.",
+      "Do use spot blue for what the printer set (strip, open tab, stub, tally fills, pitch lines, links) and biro blue for what the user marks.",
+      "Do keep red for the closing stamp and for a player who cannot play, and let a sign (+ / −) carry direction everywhere else.",
+      "Do build new tabs from the existing vocabulary — head, figure, pinned, rule-b / rule-strong-b, coupon rows, tally, box, textbtn, unprinted — before inventing a class.",
+      "Do inline any icon as SVG from lucide-react at 16px with strokeWidth 2.25 and aria-hidden, and only where a word cannot do the job.",
+      "Do label provisional, predicted or untimed data as such, and print nothing predicted at all.",
+      "Do guard any motion with prefers-reduced-motion: reduce, resolving to the finished state."
+    ],
+    "donts": [
+      "Don't add a shadow, an elevation, a glow, or a \"lifted\" hover. There are none in the system.",
+      "Don't add a border-radius. Zero everywhere; the circled C/V mark and the pitch discs are the only circles.",
+      "Don't use a gradient as a fill, a background, or an accent. The one gradient in the build is a mask on the phone tab row that fades the scroll edge; that is a mask, not a surface.",
+      "Don't wrap content in a card. A section is a head, a rule, and rows.",
+      "Don't introduce a second accent colour, a chart palette, a success green, or a warning amber. The palette is closed.",
+      "Don't colour a price change, a delta or a score red or green.",
+      "Don't use pure white, pure black or a neutral grey.",
+      "Don't add a second type family, a second axis, a fluid/clamped size, or a size outside the seven-step rem scale.",
+      "Don't use an icon font, an emoji or a glyph character as an icon, and don't put an icon where a printed word works.",
+      "Don't write a kicker or eyebrow above a heading. Labels are printed column heads above a value or run-in before a line; they are never a decorative tag over a title.",
+      "Don't animate anything but the biro X. No page transitions, no fades on mount, no skeleton shimmer, no number count-ups; state changes are 150ms ease-out on colour only.",
+      "Don't add a dark mode. The world is a sheet of paper."
+    ]
+  }
+}
