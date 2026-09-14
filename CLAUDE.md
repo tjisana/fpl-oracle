@@ -55,26 +55,29 @@ code in `fpl/`, `extract/`, `consensus/`, or `solver/`.
 
 ## Model routing
 
-Three tiers (set by the owner 2026-09-12; main sessions run on Fable 5.1):
+Three tiers (set by the owner 2026-09-12, cost-tuned 2026-09-14):
 
-- **Fable 5.1 (main session)** — the brain: planning, design decisions,
-  prompt design, integration, and the tricky modules (`solver/`,
-  `consensus/`, `extract/` are implemented here, not delegated). The
-  `architect` subagent is the same model with a clean context, for a
-  second opinion on a hard call; brief it self-contained.
+- **Opus 5 (main session, the default)** — planning, day-to-day design
+  decisions, teaching morsels, the web/API/database work, integration.
+  Half the price of Fable per token, and enough for everything routine.
+- **Fable 5.1 (`architect` subagent, and the main session when the owner
+  chooses to run it there)** — escalation for the hard calls only:
+  cross-module design questions, solver formulation trade-offs, scoring
+  philosophy, anything the main session is genuinely torn on. Also the
+  reviewer for diffs touching `solver/`, `consensus/`, or `extract/`
+  (`model: "fable"`), and the implementer of those three modules when the
+  logic is subtle — a wrong answer there costs a gameweek. The architect
+  has no conversation context: brief it self-contained (question, options,
+  constraints, file paths). It advises; the main session decides.
 - **Sonnet (`implementer` subagent)** — the worker: well-specified
   implementation from a written spec, test fixes, mechanical refactors,
   boilerplate. Only hand it a change in the tricky modules if the exact
   logic is already decided and written out in the task.
-- **Opus (reviewer)** — every diff is reviewed in a fresh-context subagent
-  run on Opus (`Agent` with `model: "opus"`), against PLAN.md and the
-  task: requirements met, edge cases tested, nothing out of scope. It
-  reports findings; the main session decides and fixes. A second model
-  is deliberate: it does not share the author's blind spots, and it costs
-  half of Fable. EXCEPTION — a diff touching `solver/`, `consensus/`, or
-  `extract/` is reviewed on Fable (`model: "fable"`, still fresh
-  context): a subtle logic error there costs a gameweek, which is worth
-  the price.
+- **Opus (reviewer)** — every other diff is reviewed in a fresh-context
+  subagent on Opus (`Agent` with `model: "opus"`), against PLAN.md and
+  the task: requirements met, edge cases tested, nothing out of scope.
+  A second model is deliberate: it does not share the author's blind
+  spots. It reports findings; the main session decides and fixes.
 
 ### Ship rule
 

@@ -177,6 +177,44 @@ is it worth -4?" Different objective, much smaller search space.
 - [ ] **Creator scoreboard** — 19/20 creators have verified FPL entry ids. Track
       their live ranks + whether their picks paid off. Makes the weights honest.
 
+## LEARNING TRACK — the owner's, runs alongside everything (added 2026-09-14)
+
+The project is two cohesive halves — the engine (harvest → extract →
+consensus → solve → report) and the site — and both are a teaching tool
+and a portfolio piece for the owner's job search (TypeScript/React, AWS,
+API design, applied AI). Morsel style throughout: one concept, one small
+task, check-in; the owner types the code. Order agreed 2026-09-14:
+
+- [ ] **Engine walkthrough** (owed since GW3): the design decisions, one
+      topic per session, captured in a doc (precedent:
+      `docs/phase1-design-review.md`). Topics: two-variable-set solver
+      objective and price anchoring; band-relative consensus and "avoid
+      is a score not a veto"; wire-schema vs strict-schema extraction and
+      the retry loop; name resolver tiers; mechanical nuance attribution;
+      transfer recommender's yardstick and refusal to price hits; free-hit
+      guard / chip consensus / wildcard gap; transcript sourcing (scraper
+      vs Gemini, the windowed read); the cloud snapshot and why files
+      before a database. Recommended to go FIRST.
+- [ ] **Front-end track**, in this order, each a morsel session against
+      DESIGN.md and the coupon components: (1) restart `npm run dev` in
+      `web/` and read DESIGN.md beside the page; (2) read the reference
+      tab's files: Box → Countdown → SquadRows → Checklist → MySquad;
+      (3) Report tab (render the run's markdown; fixture first);
+      (4) Creator ownership grid (table of players × creators, reuses rows
+      and tally); (5) Evidence trail (per-player picks, search box, URL
+      state so names on other tabs link here); (6) My squad LIVE state,
+      after Claude's live module lands.
+- [ ] **Learning log**: `docs/learning/` — one short page per concept, in
+      the owner's words after each morsel; doubles as interview prep.
+- [ ] **Architecture page**: one diagram of the seam — pipeline, storage
+      (S3 + DB), API, site, cloud — kept current; the page to open in an
+      interview.
+
+Tailwind (v4) is in and does layout and phone/desktop switching via
+utility classes; the coupon's look lives in named CSS classes in
+`web/src/index.css`; shadcn/ui is installed (decision 8) but the coupon
+rebuilds its own controls.
+
 ## THEN — web app, release one (target: a working URL by early Oct 2026)
 
 Design is settled in `docs/web-app-design.md` (19 decisions, four tab specs,
