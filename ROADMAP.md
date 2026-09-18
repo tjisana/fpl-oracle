@@ -10,7 +10,21 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW4 deadline (Sat 2026-09-12, 12:30 UTC / 08:30 EDT)
+## NOW — GW5 done (Fri 2026-09-18); next GW6 after the international break
+
+GW4: wildcard played, 81 pts vs avg 69, OR 1.61M → 1.37M. GW5 (run
+`20260918T125641Z-5a6a0e5`): ROLL, João Pedro started through a 75% flag,
+Haaland (C) Palmer (VC); decision in the run folder. 11/14 creators, 96%
+match, ~55 min end to end on fresh Gemini reads.
+
+- [ ] **GW6**: grade the João Pedro start; 2 FT banked. Run the usual
+      runbook steps with `--gameweek 6`.
+- [ ] **Extraction wall clock**: ~55 min when every video is uncached.
+      Fine for a selection-day run started early; a warm run the evening
+      before (`warm_cache --max-per-creator 1`, Gemini) would make deadline
+      morning a 10-minute job.
+
+### GW4 deadline (Sat 2026-09-12, 12:30 UTC / 08:30 EDT) — kept for the record
 
 GW3 decision (2026-09-04): Thomas → Konsa, Triple Captain on Haaland,
 wildcard deferred to GW4 with the solver's squad as the template. Grade it
