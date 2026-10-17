@@ -10,19 +10,41 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW5 done (Fri 2026-09-18); next GW6 after the international break
+## NOW — GW7 decided (Sat 2026-10-17); GW8 deadline Fri 2026-10-23 17:30 UTC
 
-GW4: wildcard played, 81 pts vs avg 69, OR 1.61M → 1.37M. GW5 (run
-`20260918T125641Z-5a6a0e5`): ROLL, João Pedro started through a 75% flag,
-Haaland (C) Palmer (VC); decision in the run folder. 11/14 creators, 96%
-match, ~55 min end to end on fresh Gemini reads.
+GW6 (run `20261010T040620Z-c125278`): both recommended transfers played,
+Isak -> Thiago (Isak out, thigh, no return date) and O'Reilly -> Tarkowski,
+Palmer (C) Haaland (VC). 73 pts vs avg 58, no hit, OR 1.59M -> 1.22M.
+11/14 creators; Gemini free-tier 503/429s cost Dylan, FPLtips and Hints, and
+Holly/Gianni fell back to older cached videos. Nuance pass did not run.
 
-- [ ] **GW6**: grade the João Pedro start; 2 FT banked. Run the usual
-      runbook steps with `--gameweek 6`.
-- [ ] **Extraction wall clock**: ~55 min when every video is uncached.
-      Fine for a selection-day run started early; a warm run the evening
-      before (`warm_cache --max-per-creator 1`, Gemini) would make deadline
-      morning a 10-minute job.
+GW7 (run `20261017T031559Z-c125278`, run ~03:15 UTC, deadline 10:00 UTC):
+USE the free transfer, Egan -> De Cuyper (9 backers vs 0, +1.1m, bank 1.4m
+-> 0.3m). Lineup 4-3-3, Haaland (C, 8/8 votes) Palmer (VC); Szoboszlai
+(25%, hamstring) last on the bench. Wildcard gap +4.61, solver keeps 8/15.
+10/14 creators (Salah, Hints, Bakar posted no GW7 video; Dylan's read
+failed on quota); 7 Gemini reads gave up on 429s. Nuance pass did not run.
+
+- [ ] **GW7**: grade it. Did Haaland play (Andy hinted a rest)? Did De Cuyper
+      start? Thiago has 0 backers and is the weakest owned pick.
+- [ ] **Nuance pass did not run in GW6 or GW7** — find out why before GW8.
+- [ ] **Gemini reliability**: the free tier ran out mid-run twice (429
+      RESOURCE_EXHAUSTED, 8 h/day video cap) plus 503s. Decide on the paid
+      tier before GW8 (billing is the owner's account).
+- [ ] **Proactive pipeline (design agreed in principle, not built)**: daily
+      cloud scan of new uploads, title-classified (post-GW analysis /
+      transfers / final thoughts / team selection); transcribe and extract
+      only the transfers video early in the week and the final videos late;
+      alerts via ntfy (long random topic name, nothing sensitive in it):
+      an early-signal alert (weighted creators buying a fit player whose
+      price is likely to rise) and a final-decision alert. Alerts only; FPL
+      has no public write API. The 55-minute read needs a container, not a
+      Lambda. Price changes land ~01:30 UTC, so an early buy only beats a
+      rise if made the day before. First step: a title classifier tested
+      against the cached uploads in `data/cache/youtube/`.
+- [ ] `aws login` expires between gameweeks and `sync_snapshots.sh` fails
+      without it; log in before the run (IAM user, not root).
+- [ ] **Extraction wall clock**: GW7 took about 55 min on the free tier.
 
 ### GW4 deadline (Sat 2026-09-12, 12:30 UTC / 08:30 EDT) — kept for the record
 
