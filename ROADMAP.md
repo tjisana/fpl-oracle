@@ -10,41 +10,81 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW7 decided (Sat 2026-10-17); GW8 deadline Fri 2026-10-23 17:30 UTC
+## NOW — GW8 decided (Fri 2026-10-23); GW9 deadline Sat 2026-10-31 11:00 UTC
 
-GW6 (run `20261010T040620Z-c125278`): both recommended transfers played,
-Isak -> Thiago (Isak out, thigh, no return date) and O'Reilly -> Tarkowski,
-Palmer (C) Haaland (VC). 73 pts vs avg 58, no hit, OR 1.59M -> 1.22M.
-11/14 creators; Gemini free-tier 503/429s cost Dylan, FPLtips and Hints, and
-Holly/Gianni fell back to older cached videos. Nuance pass did not run.
+GW6 (run `20261010T040620Z-c125278`): Isak -> Thiago and O'Reilly ->
+Tarkowski played, Palmer (C) Haaland (VC). 73 pts vs avg 58, no hit,
+OR 1.59M -> 1.22M. 11/14 creators; Gemini 503/429s cost Dylan, FPLtips, Hints.
 
-GW7 (run `20261017T031559Z-c125278`, run ~03:15 UTC, deadline 10:00 UTC):
-USE the free transfer, Egan -> De Cuyper (9 backers vs 0, +1.1m, bank 1.4m
--> 0.3m). Lineup 4-3-3, Haaland (C, 8/8 votes) Palmer (VC); Szoboszlai
-(25%, hamstring) last on the bench. Wildcard gap +4.61, solver keeps 8/15.
-10/14 creators (Salah, Hints, Bakar posted no GW7 video; Dylan's read
-failed on quota); 7 Gemini reads gave up on 429s. Nuance pass did not run.
+GW7 (run `20261017T031559Z-c125278`): Egan -> De Cuyper, 4-3-3, Haaland (C)
+Palmer (VC). GRADED: 64 pts vs avg 59, no hit, OR 1.22M -> 1.39M (above
+average yet rank fell). Haaland (C) scored 13 (26 doubled), De Cuyper 6.
+10/14 creators.
 
-- [ ] **GW7**: grade it. Did Haaland play (Andy hinted a rest)? Did De Cuyper
-      start? Thiago has 0 backers and is the weakest owned pick.
-- [ ] **Nuance pass did not run in GW6 or GW7** — find out why before GW8.
-- [ ] **Gemini reliability**: the free tier ran out mid-run twice (429
-      RESOURCE_EXHAUSTED, 8 h/day video cap) plus 503s. Decide on the paid
-      tier before GW8 (billing is the owner's account).
+GW8 (run `20261023T035119Z-3c6b167`, deadline Fri 17:30 UTC): ROLL, no
+transfer, bank the free transfer (2 FT for GW9). Best move Szoboszlai ->
+Gakpo had 0 backers; Szoboszlai (hamstring, 0%, no return date) is benched so
+he costs cover, not points. Haaland (C, 8/8 votes) João Pedro (VC); 4-3-3
+unchanged, bench Dubravka, Slater, Thomas, Szoboszlai. 13/14 creators (Salah
+posted nothing). Transcripts came from YouTube CAPTIONS, not Gemini: name
+match fell to ~60-75% (Gemini ~95%). Nuance pass did not run.
+Run `20261023T022253Z-3c6b167` is INVALID (built on one creator after the
+Anthropic credit balance hit zero) — ignore it.
+
+What went wrong this week, and what we learned:
+- **Gemini free tier is not enough for a weekly run.** Limits seen in the
+  error: 5 requests/min and 20 requests/day for the model, plus 503 "high
+  demand" on every video. All 14 transcripts failed, so we fell back to
+  captions by hand (`--source captions`); the pipeline does not fall back
+  by itself. Captions cannot see on-screen team graphics.
+- **Anthropic credits ran out mid-run** (400 "credit balance is too low"
+  after the first creator). Add credits and turn on auto-reload.
+- **YouTube captions worked again** (IP block lifted), though Pras was
+  blocked and fell back to his cached video.
+- **`aws login` kept expiring.** Created least-privilege IAM user `fpl-sync`
+  (read-only on the snapshot bucket + DescribeStacks); `sync_snapshots.sh`
+  now defaults to `AWS_PROFILE=fpl-sync`. Access key lives in
+  `~/.aws/credentials` on the laptop, never in the repo.
+
+- [ ] **GW8**: grade it. Did rolling cost anything? Did Haaland (away at
+      Villa) deliver? Plan the Szoboszlai replacement for GW9 with 2 FT.
+- [ ] **Per-video transcript fallback + retry** (build before the next
+      run): Gemini -> retry later in the run -> captions, recording which
+      source each video used; surface name-match rate per source.
+- [ ] **Gemini paid tier**: decide before GW9 (owner's billing). Fixes the
+      20/day cap and the 503s; cost per run unmeasured, likely a dollar or two.
+- [ ] **Log Claude token usage** per extraction call so cost per run is
+      measured, not guessed (extraction uses `claude-opus-5`).
+- [ ] **Nuance pass did not run in GW6, GW7 or GW8** — find out why.
+- [ ] **Creator transfer watcher (new, high value, free)**: creators' real
+      transfers are public with timestamps at
+      `entry/{team_id}/transfers/` BEFORE the deadline (verified 2026-10-17:
+      Andy's last moves landed 11 min before the deadline, after his
+      "Final Thoughts" video 19 h earlier, which had previewed them).
+      Poll the 19 creators with team IDs; shows transfers only, not
+      captain/lineup; untested whether reversed moves disappear. Ranks above
+      the video waves: no Gemini, no Claude. Their full picks (captain,
+      lineup) go public after each deadline, feeding the shadow benchmark.
+- [ ] **Title classifier (step 1 of the proactive pipeline)**: Haiku 5.5
+      behind a swappable interface, scored against an owner-reviewed answer
+      key. Sample drafted in `data/labels/gold_review.md` (100 titles,
+      pre-labelled); AWAITING the owner's corrections. Label set so far:
+      review / transfers / news / final / selection / draft / show / live /
+      other; may change (final vs selection overlap). Optional later
+      bake-off against TypeSafe's Jev (closed, early-access "System One"
+      classifier) — cost advantage is irrelevant at ~100 titles/day.
 - [ ] **Proactive pipeline (design agreed in principle, not built)**: daily
-      cloud scan of new uploads, title-classified (post-GW analysis /
-      transfers / final thoughts / team selection); transcribe and extract
-      only the transfers video early in the week and the final videos late;
-      alerts via ntfy (long random topic name, nothing sensitive in it):
-      an early-signal alert (weighted creators buying a fit player whose
-      price is likely to rise) and a final-decision alert. Alerts only; FPL
-      has no public write API. The 55-minute read needs a container, not a
-      Lambda. Price changes land ~01:30 UTC, so an early buy only beats a
-      rise if made the day before. First step: a title classifier tested
-      against the cached uploads in `data/cache/youtube/`.
-- [ ] `aws login` expires between gameweeks and `sync_snapshots.sh` fails
-      without it; log in before the run (IAM user, not root).
-- [ ] **Extraction wall clock**: GW7 took about 55 min on the free tier.
+      cloud scan of new uploads (RSS), classified by title; three waves
+      relative to the DEADLINE, not the weekday (early plans ~4-5 days out,
+      midweek, final Fri evening + deadline-morning refresh); extract only new
+      videos; alerts via ntfy (long random topic, nothing sensitive); alerts
+      only, FPL has no public write API and we will not store FPL
+      credentials in AWS. Long Gemini reads need Fargate, not Lambda (avoid a
+      NAT gateway: ~$32/mo). AWS cost is small (~$2-5/mo); Claude extraction
+      dominates, so use the Batch API (50% off) for non-urgent waves.
+      Early-buy alerts must be bank-aware: resale keeps only half of a rise.
+- [ ] **Stop needing the laptop for AWS**: the end state is the pipeline
+      running in AWS so no local credentials are needed.
 
 ### GW4 deadline (Sat 2026-09-12, 12:30 UTC / 08:30 EDT) — kept for the record
 

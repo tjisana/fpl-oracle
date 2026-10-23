@@ -3,8 +3,10 @@
 # down into data/snapshots/. Copies ONLY dates missing locally: a day both
 # jobs wrote (laptop open at 3 AM) keeps the local file, since the two are
 # the same prices with different `taken_at` stamps. Never deletes, never
-# overwrites, in either direction. Needs an `aws login` session.
+# overwrites, in either direction. Uses the `fpl-sync` AWS profile (a read-only
+# IAM user scoped to this bucket); override with AWS_PROFILE=... if needed.
 set -eu
+export AWS_PROFILE="${AWS_PROFILE:-fpl-sync}"
 cd /Users/tjisanakerr/Dev/fpl-oracle
 
 BUCKET=$(aws cloudformation describe-stacks --stack-name FplOracle \
