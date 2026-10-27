@@ -412,3 +412,99 @@ class TestChunkedReads:
         assert t is not None
         assert len(calls) == 1 and _window_of(calls[0]) is None
         assert t.source.endswith(":untimed")
+
+
+class TestHarvestSeam:
+    """`read_video_via_gemini`: the raising, countable, model-selectable
+    entry point the unattended harvester uses. Defaults must not change
+    what `fetch_transcript_via_gemini` does (covered above)."""
+
+    def test_before_request_fires_once_per_api_attempt_including_retries(self, monkeypatch) -> None:
+        n = {"calls": 0}
+
+        def responder(kw):
+            n["calls"] += 1
+            if n["calls"] == 1:
+                raise RuntimeError("503")
+            return _wire((0, "ok"))
+
+        _fake_client_factory(monkeypatch, responder)
+        fired: list[int] = []
+        t = gt.read_video_via_gemini(
+            "v", 60, before_request=lambda: fired.append(1), sleep=lambda s: None
+        )
+        assert t.segments
+        assert len(fired) == 2 == n["calls"]
+
+    def test_model_is_passed_through_and_recorded_in_the_source(self, monkeypatch) -> None:
+        calls = _fake_client_factory(monkeypatch, lambda kw: _wire((0, "x"), (10, "y")))
+        t = gt.read_video_via_gemini("v", 60, model="gemini-test-model")
+        assert calls[0]["model"] == "gemini-test-model"
+        assert t.source.startswith("gemini:gemini-test-model")
+
+    def test_default_model_is_unchanged(self, monkeypatch) -> None:
+        calls = _fake_client_factory(monkeypatch, lambda kw: _wire((0, "x")))
+        gt.fetch_transcript_via_gemini("v", 60)
+        assert calls[0]["model"] == gt.MODEL
+
+    def test_retry_delay_none_stops_after_the_first_failure_and_raises(self, monkeypatch) -> None:
+        n = {"calls": 0}
+
+        def responder(kw):
+            n["calls"] += 1
+            raise RuntimeError("boom")
+
+        _fake_client_factory(monkeypatch, responder)
+        with pytest.raises(RuntimeError, match="boom"):
+            gt.read_video_via_gemini(
+                "v", 60, max_attempts=2, retry_delay=lambda e, a: None, sleep=lambda s: None
+            )
+        assert n["calls"] == 1
+
+    def test_retry_delay_value_sleeps_then_retries(self, monkeypatch) -> None:
+        n = {"calls": 0}
+
+        def responder(kw):
+            n["calls"] += 1
+            if n["calls"] == 1:
+                raise RuntimeError("429")
+            return _wire((0, "ok"))
+
+        _fake_client_factory(monkeypatch, responder)
+        slept: list[float] = []
+        t = gt.read_video_via_gemini(
+            "v", 60, max_attempts=2, retry_delay=lambda e, a: 65.0, sleep=slept.append
+        )
+        assert t.segments
+        assert slept == [65.0]
+
+    def test_before_request_error_aborts_without_a_call(self, monkeypatch) -> None:
+        calls = _fake_client_factory(monkeypatch, lambda kw: _wire((0, "x")))
+
+        def gate() -> None:
+            raise LookupError("budget")
+
+        with pytest.raises(LookupError):
+            gt.read_video_via_gemini("v", 60, before_request=gate)
+        assert calls == []
+
+    def test_too_long_raises_its_own_error_without_a_request(self, monkeypatch) -> None:
+        calls = _fake_client_factory(monkeypatch, lambda kw: _wire((0, "x")))
+        monkeypatch.delenv(gt.MAX_VIDEO_SECONDS_ENV_VAR, raising=False)
+        with pytest.raises(gt.VideoTooLongError):
+            gt.read_video_via_gemini("v", 99 * 3600)
+        assert calls == []
+
+    def test_before_request_does_not_fire_when_the_client_cannot_be_built(
+        self, monkeypatch
+    ) -> None:
+        def no_key():
+            raise RuntimeError("no key")
+
+        monkeypatch.setattr(gt, "_client", no_key)
+        fired: list[int] = []
+        with pytest.raises(RuntimeError, match="no key"):
+            gt.read_video_via_gemini(
+                "v", 60, before_request=lambda: fired.append(1), sleep=lambda s: None
+            )
+        assert fired == []

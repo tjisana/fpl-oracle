@@ -176,6 +176,7 @@ def _to_transcript(
     duration_seconds: float | None = None,
     *,
     chunked: bool = False,
+    model: str = MODEL,
 ) -> Transcript:
     """Convert wire segments to our `Transcript`, deriving each segment's
     duration from the NEXT segment's start.
@@ -237,11 +238,11 @@ def _to_transcript(
         is_generated=True,
         segments=segments,
         source=(
-            f"gemini:{MODEL}:untimed:chunked"
+            f"gemini:{model}:untimed:chunked"
             if chunked
-            else f"gemini:{MODEL}"
+            else f"gemini:{model}"
             if timings_ok
-            else f"gemini:{MODEL}:untimed"
+            else f"gemini:{model}:untimed"
         ),
     )
 
@@ -292,15 +293,41 @@ def chunk_windows(
     return windows
 
 
+class _GateAbortedError(Exception):
+    """Internal: `before_request` raised; unwrapped and re-raised as-is."""
+
+
+def gemini_api_key_present() -> bool:
+    """True if a Gemini API key is configured (never reveals the value)."""
+    load_dotenv()
+    return bool(os.environ.get(GEMINI_API_KEY_ENV_VAR))
+
+
 def _read_window(
     video_id: str,
     window: tuple[float, float] | None,
     part: tuple[int, int] | None,
+    *,
+    model: str = MODEL,
+    max_attempts: int | None = None,
+    before_request: Callable[[], None] | None = None,
+    retry_delay: Callable[[Exception, int], float | None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> _WireTranscript:
     """One request with retries. `window=None` reads the whole video (the
     short-video path, unchanged); otherwise only [start, end) via the
     API's video offsets, with the prompt told which part it is reading.
-    Raises the last error after `MAX_ATTEMPTS`."""
+    Raises the last error after `max_attempts` (default `MAX_ATTEMPTS`).
+
+    The keyword-only parameters are the seam the unattended harvester
+    (`ingest/harvest.py`) uses to own Gemini's scarce request budget;
+    defaults leave every existing caller's behaviour unchanged.
+    `before_request` runs before EVERY API attempt, retries included, and
+    may raise to abort (it is outside the retry try-block, so its error
+    propagates untouched). `retry_delay(error, attempt)` replaces the blind
+    retry: it returns seconds to sleep before the next attempt, or None to
+    stop retrying and raise."""
+    attempts_allowed = MAX_ATTEMPTS if max_attempts is None else max_attempts
     from google.genai import types
 
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -321,16 +348,24 @@ def _read_window(
             f"window and nothing outside it."
         )
     last_error: Exception | None = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for attempt in range(1, attempts_allowed + 1):
         try:
             # Client construction is INSIDE the loop deliberately. It can
             # fail for configuration reasons (no API key), and the caller
             # promises never to raise — a caller mid-run must get a None it
             # can record and step over. The cause is logged either way.
             client = _client()
+            # The gate fires only AFTER the client is built, so a request
+            # that can never reach the API (missing key) is never counted
+            # against a budget. Its own errors abort the read untouched.
+            if before_request is not None:
+                try:
+                    before_request()
+                except Exception as gate_error:
+                    raise _GateAbortedError from gate_error
             response = _call_with_deadline(
                 lambda client=client: client.models.generate_content(
-                    model=MODEL,
+                    model=model,
                     contents=types.Content(parts=[video_part, types.Part(text=prompt)]),
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
@@ -350,18 +385,122 @@ def _read_window(
             if not any(seg.text.strip() for seg in wire.segments):
                 raise ValueError("Gemini returned zero usable segments")
             return wire
-        except Exception as e:  # noqa: BLE001 - per-attempt failure; caller decides
+        except _GateAbortedError as aborted:
+            assert aborted.__cause__ is not None
+            raise aborted.__cause__ from None
+        except Exception as e:
             last_error = e
             logger.warning(
                 "gemini_transcripts: %s%s — attempt %d/%d failed: %s",
                 video_id,
                 f" part {part[0]}/{part[1]}" if part else "",
                 attempt,
-                MAX_ATTEMPTS,
+                attempts_allowed,
                 type(e).__name__,
             )
+            if retry_delay is not None:
+                delay = retry_delay(e, attempt)
+                if delay is None:
+                    raise
+                if delay > 0:
+                    sleep(delay)
     assert last_error is not None
     raise last_error
+
+
+class VideoTooLongError(Exception):
+    """The video exceeds `max_video_seconds()`; refused before any request."""
+
+
+def read_video_via_gemini(
+    video_id: str,
+    duration_seconds: float | None = None,
+    *,
+    model: str = MODEL,
+    max_attempts: int | None = None,
+    before_request: Callable[[], None] | None = None,
+    retry_delay: Callable[[Exception, int], float | None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Transcript:
+    """Like `fetch_transcript_via_gemini` but RAISES instead of returning
+    None, so a caller that budgets requests can classify the failure
+    (503 vs per-minute 429 vs daily 429). `model`, `max_attempts`,
+    `before_request` and `retry_delay` are documented on `_read_window`;
+    `before_request` fires once per API attempt across all windows.
+    Raises `VideoTooLongError` (no request made), or whatever the last
+    failed attempt raised, or ValueError for an unusable response."""
+    limit = max_video_seconds()
+    if duration_seconds is not None and duration_seconds > limit:
+        logger.warning(
+            "gemini_transcripts: %s — %.0f min video exceeds the %.0f min ceiling "
+            "(%s); skipping without a request",
+            video_id,
+            duration_seconds / 60,
+            limit / 60,
+            MAX_VIDEO_SECONDS_ENV_VAR,
+        )
+        raise VideoTooLongError(video_id)
+
+    def read(window: tuple[float, float] | None, part: tuple[int, int] | None) -> _WireTranscript:
+        return _read_window(
+            video_id,
+            window,
+            part,
+            model=model,
+            max_attempts=max_attempts,
+            before_request=before_request,
+            retry_delay=retry_delay,
+            sleep=sleep,
+        )
+
+    windows = chunk_windows(duration_seconds) if duration_seconds is not None else None
+    chunked = windows is not None and len(windows) > 1
+    if not chunked:
+        wire = read(None, None)
+        transcript = _to_transcript(video_id, wire, duration_seconds, model=model)
+    else:
+        assert windows is not None
+        merged: list[_WireSegment] = []
+        language = "en"
+        previous_start: float | None = None
+        for i, window in enumerate(windows, start=1):
+            if previous_start is not None:
+                wait = CHUNK_SPACING_SECONDS - (clock() - previous_start)
+                if wait > 0:
+                    sleep(wait)
+            previous_start = clock()
+            wire = read(window, (i, len(windows)))
+            language = wire.language or language
+            merged.extend(wire.segments)
+            logger.info(
+                "gemini_transcripts: %s — part %d/%d (%.0f-%.0f min): %d segments",
+                video_id,
+                i,
+                len(windows),
+                window[0] / 60,
+                window[1] / 60,
+                len(wire.segments),
+            )
+        transcript = _to_transcript(
+            video_id,
+            _WireTranscript(language=language, segments=merged),
+            duration_seconds,
+            chunked=True,
+            model=model,
+        )
+
+    if not transcript.segments:
+        raise ValueError("no usable segments")
+    logger.info(
+        "gemini_transcripts: %s — %d segments, %d words (%s%s)",
+        video_id,
+        len(transcript.segments),
+        len(transcript.full_text.split()),
+        model,
+        f", {len(windows)} windows" if chunked and windows else "",
+    )
+    return transcript
 
 
 def fetch_transcript_via_gemini(
@@ -385,66 +524,10 @@ def fetch_transcript_via_gemini(
     team reveal the video exists for. Chunked transcripts are always
     `:untimed:chunked` — window timings cannot be trusted or stitched.
     An unknown duration is read as a single request, as before."""
-    limit = max_video_seconds()
-    if duration_seconds is not None and duration_seconds > limit:
-        logger.warning(
-            "gemini_transcripts: %s — %.0f min video exceeds the %.0f min ceiling "
-            "(%s); skipping without a request",
-            video_id,
-            duration_seconds / 60,
-            limit / 60,
-            MAX_VIDEO_SECONDS_ENV_VAR,
-        )
-        return None
-
-    windows = chunk_windows(duration_seconds) if duration_seconds is not None else None
-    chunked = windows is not None and len(windows) > 1
     try:
-        if not chunked:
-            wire = _read_window(video_id, None, None)
-            transcript = _to_transcript(video_id, wire, duration_seconds)
-        else:
-            assert windows is not None
-            merged: list[_WireSegment] = []
-            language = "en"
-            previous_start: float | None = None
-            for i, window in enumerate(windows, start=1):
-                if previous_start is not None:
-                    wait = CHUNK_SPACING_SECONDS - (clock() - previous_start)
-                    if wait > 0:
-                        sleep(wait)
-                previous_start = clock()
-                wire = _read_window(video_id, window, (i, len(windows)))
-                language = wire.language or language
-                merged.extend(wire.segments)
-                logger.info(
-                    "gemini_transcripts: %s — part %d/%d (%.0f-%.0f min): %d segments",
-                    video_id,
-                    i,
-                    len(windows),
-                    window[0] / 60,
-                    window[1] / 60,
-                    len(wire.segments),
-                )
-            transcript = _to_transcript(
-                video_id,
-                _WireTranscript(language=language, segments=merged),
-                duration_seconds,
-                chunked=True,
-            )
+        return read_video_via_gemini(video_id, duration_seconds, sleep=sleep, clock=clock)
+    except VideoTooLongError:
+        return None  # already warned in read_video_via_gemini
     except Exception as e:  # noqa: BLE001 - per-video failure, never fatal
         logger.error("gemini_transcripts: %s — giving up: %s", video_id, e)
         return None
-
-    if not transcript.segments:
-        logger.error("gemini_transcripts: %s — giving up: no usable segments", video_id)
-        return None
-    logger.info(
-        "gemini_transcripts: %s — %d segments, %d words (%s%s)",
-        video_id,
-        len(transcript.segments),
-        len(transcript.full_text.split()),
-        MODEL,
-        f", {len(windows)} windows" if chunked and windows else "",
-    )
-    return transcript
