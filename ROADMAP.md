@@ -10,7 +10,52 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW8 decided (Fri 2026-10-23); GW9 deadline Sat 2026-10-31 11:00 UTC
+## NOW — GW10 decided (Fri 2026-11-06); building the harvest autopilot
+
+GW9 (deadline Sat 2026-10-31, no pipeline run — judgement call): João Pedro
+-> Jackson. GRADED: 78 pts, week rank 112,753, OR 1.23M -> 548k.
+
+GW10 (run `20261106T125047Z-f35d4c2`, deadline Fri 18:30 UTC): 2 FT, used
+one: Konsa (knee, 75%) -> Silva (9 backers, +0.3m); other FT banked (2 for
+GW11). 4-3-3, Haaland (C) Palmer (VC), bench Dubravka, Szoboszlai, Slater,
+Thomas (50%). 13/14 creators (Hints posted nothing). The first extraction
+pass hit "credit balance too low" again for 5 creators; re-run after top-up.
+The pipeline assumed 1 FT ("could not be derived") — real count was 2: fix.
+
+**Harvest (Phase 1, built f35d4c2) first live result:** Gemini 503s burn the
+18-request/day budget (13 requests bought 4 transcripts) and every retry pass
+re-hit 503s; captions covered the rest. Pass 1 + 2 left 37% of creator
+weight transcribed at 9.6 h out.
+
+**Autopilot plan (decided 2026-11-06): straight to AWS, local launchd job as
+the fallback if AWS fails.** Data from GW1-10 (119 extracted selection
+videos, 15 channels):
+- Selection videos land: 88% within 72 h of the deadline, 77% within 48 h,
+  69% within 36 h, 41% within 24 h, 16% within 12 h; median 29 h before
+  (p10 9 h, p90 75 h). The night-before checkpoint (~20 h out) therefore
+  sees only about half of the final videos: the goal is "what exists + who
+  is missing", not completeness. T-72 h waves are near-empty (12%).
+- First "GW N" video appears 1-2 days after the previous deadline (reviews,
+  early plans); ~57% of relevant videos land in the last 3 days.
+- Listing is nearly free (1 YouTube unit per channel vs 10,000/day): scan
+  every 2-3 h from T-72 h. The scarce resource is the Gemini budget: ~1.5
+  requests per video (30-min windows); ~40 relevant videos/week.
+- Budget policy: spend leftover daily budget (18/day, resets 08:00 UTC)
+  in creator-weight order on classifier-flagged videos; keep ~10 requests
+  for the last 36 h; captions as fallback.
+- Stale-video rule: if a creator's newest video can't be transcribed, use
+  their latest harvested one, flagged with its age and a modest weight
+  haircut (initial value a guess; calibrate by comparing early-video picks
+  with the same creator's final picks once autopilot has a few weeks of
+  data). The report must show per-creator freshness.
+- Order: (1) AWS test that captions can be fetched from an AWS IP (YouTube
+  often blocks cloud IPs) — one step at a time; (2) deadline-relative
+  scheduler + readiness report (`harvest status`); (3) title classifier;
+  (4) ntfy alert on low coverage.
+- Open: automatic night-before extraction under a spend cap vs explicit yes;
+  Gemini paid tier (prepaid credits exist, $5 min; paid key = no free
+  quota on that project; `gemini-3.5-flash` has no listed price, 3.8 Flash
+  $0.75/$3.75 per M through Dec 2026) — skipped for GW10, captions covered.
 
 GW6 (run `20261010T040620Z-c125278`): Isak -> Thiago and O'Reilly ->
 Tarkowski played, Palmer (C) Haaland (VC). 73 pts vs avg 58, no hit,
