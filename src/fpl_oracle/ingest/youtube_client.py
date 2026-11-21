@@ -406,7 +406,9 @@ def get_video_durations(video_ids: list[str]) -> dict[str, int]:
     for video_id in video_ids:
         cache_path = _cache_path_preserving_case("duration", video_id)
         cached = _read_cache(cache_path)
-        if cached is not None and "duration_s" in cached:
+        # A cached 0 is a live/upcoming premiere (P0D) whose real duration is
+        # not known yet: never trust it, ask the API again.
+        if cached is not None and cached.get("duration_s", 0) > 0:
             durations[video_id] = cached["duration_s"]
         else:
             missing.append(video_id)
@@ -422,7 +424,10 @@ def get_video_durations(video_ids: list[str]) -> dict[str, int]:
             video_id = item["id"]
             seconds = parse_iso8601_duration(item["contentDetails"]["duration"])
             durations[video_id] = seconds
-            _write_cache(_cache_path_preserving_case("duration", video_id), {"duration_s": seconds})
+            if seconds > 0:  # see above: 0 means "not finished airing", never cache it
+                _write_cache(
+                    _cache_path_preserving_case("duration", video_id), {"duration_s": seconds}
+                )
 
     return durations
 

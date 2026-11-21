@@ -59,6 +59,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -167,6 +168,10 @@ class ModelUsage(BaseModel):
     requests: dict[str, int] = Field(default_factory=dict)  # Pacific quota day -> count
     # Days on which a daily 429 fired: done for that day whatever our count says.
     exhausted_days: list[str] = Field(default_factory=list)
+    # Days on which a key-level error (401, API_KEY_INVALID, ...) hit this
+    # model: callers that run unattended skip Gemini for the rest of that day
+    # instead of burning a counted request per run. A success clears them.
+    key_failed_days: list[str] = Field(default_factory=list)
 
 
 class GeminiUsageFile(BaseModel):
@@ -188,6 +193,18 @@ class GeminiUsageFile(BaseModel):
     def add_request(self, model: str, day: str) -> None:
         usage = self._model(model)
         usage.requests[day] = usage.requests.get(day, 0) + 1
+
+    def key_failed(self, model: str, day: str) -> bool:
+        return model in self.models and day in self.models[model].key_failed_days
+
+    def mark_key_failed(self, model: str, day: str) -> None:
+        usage = self._model(model)
+        if day not in usage.key_failed_days:
+            usage.key_failed_days.append(day)
+
+    def clear_key_failed(self, model: str) -> None:
+        if model in self.models:
+            self.models[model].key_failed_days.clear()
 
     def mark_exhausted(self, model: str, day: str) -> None:
         usage = self._model(model)
@@ -223,6 +240,11 @@ def _atomic_write(path: Path, text: str) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+# Public alias for sibling modules (autopilot ledger) that need the same
+# crash-safe write.
+atomic_write = _atomic_write
 
 
 def load_state(gameweek: int, state_dir: Path = DEFAULT_STATE_DIR) -> HarvestState:
@@ -368,6 +390,30 @@ def is_key_level_error(error: BaseException) -> bool:
         or "SERVICE_DISABLED" in text
         or "API HAS NOT BEEN USED" in text
     )
+
+
+@dataclass
+class RunFlags:
+    """State a caller can carry ACROSS several `run_harvest` calls (autopilot
+    runs one call per video): in = how to start, out = how the run ended.
+
+    gemini_available: None = check the key at the start; after the run, False
+        if Gemini was found unusable (no key, or a key-level API error).
+    captions_blocked: the "never loop on a block" circuit breaker.
+    max_requests: hard cap on Gemini requests THIS call may send (a 429
+        retry cannot overshoot it); None = no cap. Hitting it leaves the
+        video pending instead of falling back to captions.
+    """
+
+    gemini_available: bool | None = None
+    captions_blocked: bool = False
+    max_requests: int | None = None
+    # Caption scrapes made so far: carried so the pacing gap applies between
+    # videos as well as within one call.
+    caption_calls: int = 0
+    # Why Gemini is switched off, if the caller did it on purpose (e.g.
+    # "budget"); recorded as `fell_back_reason`. None = "gemini_unavailable".
+    gemini_off_reason: str | None = None
 
 
 class BudgetExhaustedError(Exception):
@@ -551,8 +597,20 @@ class _Harvester:
         gemini_reader: GeminiReader,
         caption_reader: CaptionReader,
         gemini_available: bool,
+        captions_enabled: bool = True,
+        max_requests: int | None = None,
+        captions_blocked: bool = False,
+        caption_calls: int = 0,
+        gemini_off_reason: str | None = None,
     ) -> None:
+        self.gemini_off_reason = gemini_off_reason
         self.gameweek = gameweek
+        self.max_requests = max_requests
+        self.allowance_hit = False
+        # False = Gemini only (autopilot --no-captions): a video Gemini
+        # cannot cover is left pending with `fell_back_reason` set, and the
+        # caption scraper is never called.
+        self.captions_enabled = captions_enabled
         self.targets = list(targets)
         self.deadline = deadline
         self.config = config
@@ -561,8 +619,8 @@ class _Harvester:
         self.gemini_reader = gemini_reader
         self.caption_reader = caption_reader
         self.state = load_state(gameweek, config.state_dir)
-        self.captions_blocked = False
-        self.caption_calls = 0
+        self.captions_blocked = captions_blocked
+        self.caption_calls = caption_calls
         self.requests_this_run = 0
         self.limits = config.gemini_daily_limits
         self.usage = load_usage(config.state_dir)
@@ -638,7 +696,7 @@ class _Harvester:
             return  # waiting out a backoff; only the deadline backstop overrides this
 
         if not self.gemini_available:
-            self._use_captions(target, REASON_GEMINI_UNAVAILABLE)
+            self._use_captions(target, self.gemini_off_reason or REASON_GEMINI_UNAVAILABLE)
             return
 
         day = quota_day(self.now())
@@ -656,6 +714,8 @@ class _Harvester:
                 else None
             )
             if model is None:
+                if self.allowance_hit:
+                    return  # the caller's request cap, not a Gemini problem: stay pending
                 reason = no_gemini_reason(self.usage, self.limits, day, cost)
                 self._use_captions(target, reason)
                 return
@@ -680,6 +740,9 @@ class _Harvester:
 
         def before_request() -> None:
             day = quota_day(self.now())
+            if self.max_requests is not None and self.requests_this_run >= self.max_requests:
+                self.allowance_hit = True
+                raise BudgetExhaustedError(f"{model}: caller request cap")
             if (
                 self.usage.is_exhausted(model, day)
                 or self.usage.used(model, day) >= self.limits[model]
@@ -727,6 +790,10 @@ class _Harvester:
                     # Every other video would fail the same way.
                     self.gemini_available = False
                     vs.last_error = f"{model}: api key unusable: {type(e).__name__}"
+                    self.usage.mark_key_failed(
+                        model, sent_days[-1] if sent_days else quota_day(self.now())
+                    )
+                    self._save_usage()
                 # Either way this video is not retried on Gemini today (so it
                 # cannot re-trigger a switch-off every run). Day = when SENT.
                 vs.gemini_error_day = sent_days[-1] if sent_days else quota_day(self.now())
@@ -742,6 +809,9 @@ class _Harvester:
             return "retry_later"
 
         save_transcript(transcript, dir=self.config.transcript_dir)
+        if self.usage.models.get(model) and self.usage.models[model].key_failed_days:
+            self.usage.clear_key_failed(model)  # the key works again
+            self._save_usage()
         vs.status = "ok"
         vs.source = transcript.source
         vs.last_error = None
@@ -758,6 +828,10 @@ class _Harvester:
         # video left Gemini in the first place.
         if vs.fell_back_reason is None or reason != REASON_BACKSTOP:
             vs.fell_back_reason = reason
+        if not self.captions_enabled:
+            vs.last_error = f"captions disabled; Gemini did not cover it ({reason})"
+            self._save()
+            return
         if self.captions_blocked:
             vs.last_error = "captions blocked this run (IpBlocked); left pending"
             self._save()
@@ -812,6 +886,8 @@ class _Harvester:
         """Deadline backstop: a selected video still without a transcript
         when the deadline is within `backstop_hours` goes to captions
         regardless of budget or retry timers."""
+        if not self.captions_enabled:
+            return  # the backstop IS a captions fallback
         if not in_backstop(self.deadline, self.now(), self.config.backstop_hours):
             return
         for target in _order_by_weight(self.targets):
@@ -931,16 +1007,22 @@ def run_harvest(
     gemini_reader: GeminiReader = default_gemini_reader,
     caption_reader: CaptionReader = default_caption_reader,
     gemini_available: Callable[[], bool] | None = None,
+    captions_enabled: bool = True,
+    take_lock: bool = True,
+    flags: RunFlags | None = None,
 ) -> HarvestResult:
     """Harvest transcripts for `targets`. Idempotent: videos with a cached
     transcript are never touched. Every collaborator (clock, sleep, both
     readers) is injectable so the whole thing runs offline in tests.
 
     Holds an exclusive lock for the whole run; raises `HarvestLockedError`
-    at once if another run holds it."""
+    at once if another run holds it. `take_lock=False` is for a caller that
+    already holds `run_lock(config.state_dir)` (autopilot). `captions_enabled=
+    False` makes the run Gemini-only (see `_Harvester`)."""
     config = config or HarvestConfig()
     check = gemini_available or gemini_api_key_present
-    with run_lock(config.state_dir):
+    flags = flags if flags is not None else RunFlags()
+    with run_lock(config.state_dir) if take_lock else contextlib.nullcontext():
         harvester = _Harvester(
             gameweek,
             targets,
@@ -950,9 +1032,21 @@ def run_harvest(
             sleep=sleep,
             gemini_reader=gemini_reader,
             caption_reader=caption_reader,
-            gemini_available=check(),
+            gemini_available=flags.gemini_available
+            if flags.gemini_available is not None
+            else check(),
+            captions_enabled=captions_enabled,
+            max_requests=flags.max_requests,
+            captions_blocked=flags.captions_blocked,
+            caption_calls=flags.caption_calls,
+            gemini_off_reason=flags.gemini_off_reason,
         )
-        harvester.run()
+        try:
+            harvester.run()
+        finally:
+            flags.gemini_available = harvester.gemini_available
+            flags.captions_blocked = harvester.captions_blocked
+            flags.caption_calls = harvester.caption_calls
         return harvester.result()
 
 
