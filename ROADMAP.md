@@ -10,17 +10,48 @@ squad this week — surfaced in a web app, deployed in the cloud.
 
 ---
 
-## NOW — GW10 decided (Fri 2026-11-06); building the harvest autopilot
+## NOW — GW11 decided (Sat 2026-11-21, deadline 11:00 UTC); building the harvest autopilot
 
 GW9 (deadline Sat 2026-10-31, no pipeline run — judgement call): João Pedro
 -> Jackson. GRADED: 78 pts, week rank 112,753, OR 1.23M -> 548k.
 
 GW10 (run `20261106T125047Z-f35d4c2`, deadline Fri 18:30 UTC): 2 FT, used
-one: Konsa (knee, 75%) -> Silva (9 backers, +0.3m); other FT banked (2 for
-GW11). 4-3-3, Haaland (C) Palmer (VC), bench Dubravka, Szoboszlai, Slater,
-Thomas (50%). 13/14 creators (Hints posted nothing). The first extraction
-pass hit "credit balance too low" again for 5 creators; re-run after top-up.
-The pipeline assumed 1 FT ("could not be derived") — real count was 2: fix.
+one: Konsa (knee, 75%) -> Silva (9 backers, +0.3m); other FT banked. 4-3-3,
+Haaland (C) Palmer (VC), bench Dubravka, Szoboszlai, Slater, Thomas.
+13/14 creators (Hints posted nothing); the first extraction pass hit
+"credit balance too low" for 5 creators and was re-run after a top-up.
+GRADED: 46 pts vs avg 55, week rank 8.5M, OR 548k -> 1.00M, 9 pts on the
+bench (Szoboszlai 7). Haaland (C) 2, Palmer 2, Rogers 2, Thiago -2 (red
+card; suspended until 5 Dec). The consensus squad blanked as a group.
+
+GW11 (run `20261121T010710Z-9242908`, deadline Sat 11:00 UTC; 3-week gap
+after GW10 = international break): 12/14 creators (Bakar, Hints no video;
+5 of the 12 from captions: Focal, Holly Shand, Salah, Raptor, Pras). 2 FT
+(pipeline still assumed 1). Forced move Thiago -> Evanilson (BOU, 5
+backers, -£1.3m) — OVERRIDES the pipeline's Havertz (0 backers). Second FT
+rolled (Silva -> Vuskovic +0.57 only just over the bar, would triple up
+Brighton). 4-3-3, Haaland (C), Jackson (VC, my judgement; the pipeline gave
+no vice), bench Dubravka, Szoboszlai, Slater, Thomas (75%). Owner reported
+making the transfers; the public transfers endpoint had not yet shown the
+GW11 move when checked. To grade after the gameweek.
+- **Szoboszlai on the bench (owner questioned it):** creator support is
+  nil (1 avoid, 2 watchlists, 0 backers), form 2.7 / ppg 3.6 vs Palmer 3.0 /
+  4.7 and Rogers 4.0 / 5.2, but xGI/90 0.49 is above Palmer's 0.38. A
+  genuine coin flip; I carried the GW10 shape forward rather than weighing
+  him explicitly. A 3-4-3 with Szoboszlai for Tarkowski (EVE away at BRE,
+  FDR 4, xGI/90 0.03) is the better alternative to examine.
+- **Pipeline issues found:** (1) free transfers not derived (assumes 1; real
+  count was 2 in both GW10 and GW11), which also mislabels a free move as a
+  -4 hit; (2) forced-move ranking is dominated by price, so a 0-backer
+  player (Havertz) tops the list; (3) no vice-captain is produced.
+- **Harvest GW11:** 7 creators via Gemini, 5 via captions; 16 of 18 Gemini
+  requests burned on 503s; budget gone until 08:00 UTC; final pass with
+  `--backstop-hours 24` pushed the pending five to captions at T-12 h.
+  Extraction 12/14, no credit failures.
+- **Caption fetch from AWS is blocked** (CloudShell, 2026-11-06:
+  `RequestBlocked`); Gemini from AWS untested. Hybrid design written up in
+  `docs/autopilot-spec.md` (DRAFT, awaiting owner approval and 3 answers:
+  36 h reserve of 10, Docker Desktop installed?, approve to start M1).
 
 **Harvest (Phase 1, built f35d4c2) first live result:** Gemini 503s burn the
 18-request/day budget (13 requests bought 4 transcripts) and every retry pass
